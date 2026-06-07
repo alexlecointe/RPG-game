@@ -329,9 +329,10 @@ async def execute_agent(
 
     tools = _resolve_tools(mission_type, settings, company_id, company_slug)
 
+    resolved_registry = None
     if tools:
-        registry = get_company_tool_registry(company_id, company_slug) if company_id else get_tool_registry()
-        registry.set_mission_context(mission_id=company_id, company_id=company_id)
+        resolved_registry = get_company_tool_registry(company_id, company_slug) if company_id else get_tool_registry()
+        resolved_registry.set_mission_context(mission_id=company_id, company_id=company_id)
 
     resolved_provider, resolved_model = _resolve_model(mission_type)
     if settings.agent_mode in ("openai", "anthropic"):
@@ -363,6 +364,7 @@ async def execute_agent(
             result = await _call_provider(
                 provider, system_prompt, user_prompt, output_format,
                 settings, tools, log_callback, tool_iterations, model,
+                tool_registry=resolved_registry,
             )
 
             if log_callback:
@@ -412,15 +414,18 @@ async def _call_provider(
     log_callback: Optional[Callable] = None,
     max_iterations: int = MAX_TOOL_ITERATIONS,
     model: str = "",
+    tool_registry=None,
 ) -> AgentResult:
     if provider == "anthropic":
         return await _call_anthropic(
             system_prompt, user_prompt, output_format, settings, tools, log_callback,
             max_iterations, model=model or settings.anthropic_model,
+            tool_registry=tool_registry,
         )
     return await _call_openai(
         system_prompt, user_prompt, output_format, settings, tools, log_callback,
         max_iterations, model=model or settings.openai_model,
+        tool_registry=tool_registry,
     )
 
 
@@ -437,6 +442,7 @@ async def _call_anthropic(
     log_callback: Optional[Callable] = None,
     max_iterations: int = MAX_TOOL_ITERATIONS,
     model: str = "",
+    tool_registry=None,
 ) -> AgentResult:
     from app.agents.llm_client import call_anthropic_raw, COMPLEX_TIMEOUT_S
 
@@ -446,7 +452,7 @@ async def _call_anthropic(
     all_token_stats: list[TokenStats] = []
 
     api_tools = [t.to_anthropic_schema() for t in tools] if tools else []
-    registry = get_tool_registry() if tools else None
+    registry = tool_registry if (tool_registry and tools) else (get_tool_registry() if tools else None)
 
     for iteration in range(max_iterations + 1):
         response, latency = await call_anthropic_raw(
@@ -520,6 +526,7 @@ async def _call_openai(
     log_callback: Optional[Callable] = None,
     max_iterations: int = MAX_TOOL_ITERATIONS,
     model: str = "",
+    tool_registry=None,
 ) -> AgentResult:
     from app.agents.llm_client import call_openai_raw, COMPLEX_TIMEOUT_S
 
@@ -532,7 +539,7 @@ async def _call_openai(
     all_token_stats: list[TokenStats] = []
 
     api_tools = [t.to_openai_schema() for t in tools] if tools else None
-    registry = get_tool_registry() if tools else None
+    registry = tool_registry if (tool_registry and tools) else (get_tool_registry() if tools else None)
 
     for iteration in range(max_iterations + 1):
         response, latency = await call_openai_raw(

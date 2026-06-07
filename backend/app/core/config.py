@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     mission_rate_limit_per_hour: int = 10
 
     # Tool calling
-    tools_enabled: bool = False
+    tools_enabled: bool = True
     tavily_api_key: str = ""
     firecrawl_api_key: str = ""
     vercel_token: str = ""
