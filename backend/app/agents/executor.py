@@ -198,12 +198,14 @@ def _build_user_prompt(
     mission_statement: str,
     product_description: str = "",
     target_audience: str = "",
+    business_type: str = "ecommerce",
     output_format: str = "markdown",
     chain_context: list[dict] | None = None,
     memory_context: list[dict] | None = None,
 ) -> str:
     parts = [
         f'Company: "{company_name}"',
+        f"Type de business: {business_type}",
         f"Mission: {mission_statement}" if mission_statement else "",
         f"Produit: {product_description}" if product_description else "",
         f"Audience cible: {target_audience}" if target_audience else "",
@@ -234,6 +236,12 @@ def _build_user_prompt(
         )
 
     parts.extend([
+        "\n--- CONTRAINTE DE COHERENCE OBLIGATOIRE ---",
+        "Tu dois travailler exclusivement sur l'idee, le produit, l'audience et le type de business fournis ci-dessus.",
+        "Ne change jamais le produit, le secteur, le probleme utilisateur ou le business model.",
+        "Si le contexte est court ou ambigu, enrichis-le prudemment sans inventer une nouvelle idee.",
+        "Tous les exemples, concurrents, features, prix, canaux et recommandations doivent rester coherents avec ce contexte.",
+        "--- FIN CONTRAINTE ---\n",
         f"Tache: {mission_type}",
         f"Format attendu: {output_format}",
         "Produis uniquement le livrable final, sans preambule ni explication.",
@@ -302,7 +310,7 @@ async def execute_agent(
 
     user_prompt = _build_user_prompt(
         mission_type, company_name, mission_statement,
-        product_description, target_audience, output_format,
+        product_description, target_audience, business_type, output_format,
         chain_context=chain_context,
         memory_context=memory_context,
     )
