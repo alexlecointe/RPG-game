@@ -94,6 +94,28 @@ async def get_mission(mission_id: str, db: DbSession):
     return mission
 
 
+@router.post("/missions/{mission_id}/retry")
+async def retry_mission(mission_id: str, db: DbSession):
+    """Re-fire the runner for a mission stuck in pending/running."""
+    from app.workers.runner import schedule_mission_run
+    from app.models.entities import MissionStatus as MS
+
+    svc = MissionService(db)
+    mission = await svc.get_mission(mission_id)
+    if not mission:
+        raise HTTPException(404, "Mission not found")
+    if mission.status == MS.COMPLETED:
+        raise HTTPException(400, "Mission already completed")
+
+    # Reset to pending so the runner starts fresh
+    mission.status = MS.PENDING
+    mission.started_at = None
+    mission.error_message = None
+    await db.commit()
+    schedule_mission_run(mission_id)
+    return {"ok": True, "mission_id": mission_id, "status": "retrying"}
+
+
 @router.get("/missions/{mission_id}/tool-calls")
 async def get_tool_calls(mission_id: str, db: DbSession):
     """Return the full audit log of tool calls for a mission."""
