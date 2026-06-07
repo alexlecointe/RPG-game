@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Optional
 
 import structlog
@@ -8,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.mission_catalog import MISSION_CATALOG
 from app.models.entities import (
+    AgentType,
     BusinessType,
     Company,
     CompanyNotification,
@@ -95,6 +97,9 @@ class OrchestratorService:
                 f"Etapes debloquees : {', '.join(newly_names)}",
             )
 
+        # Fire-and-forget: CEO LLM generates a strategic "next move" insight
+        self._fire_ceo_next_move(company, completed_step_title)
+
         if not company.auto_pilot:
             await self._db.commit()
             return available
@@ -102,6 +107,90 @@ class OrchestratorService:
         launched = await self._auto_launch(company, available)
         await self._db.commit()
         return launched
+
+    # ------------------------------------------------------------------
+    # CEO "next move" — LLM thinks after every completed mission
+    # ------------------------------------------------------------------
+
+    def _fire_ceo_next_move(self, company: Company, completed_step_title: str) -> None:
+        """Spawn a background task: CEO LLM reads the last deliverable and proposes next move."""
+        try:
+            asyncio.get_running_loop().create_task(
+                self._generate_ceo_next_move(company, completed_step_title)
+            )
+        except RuntimeError:
+            pass
+
+    async def _generate_ceo_next_move(
+        self, company: Company, completed_step_title: str
+    ) -> None:
+        """Call OrchestratorAgent LLM with company context + last deliverable to produce next move."""
+        try:
+            from app.agents.executor import execute_agent
+            from app.core.database import SessionLocal
+            from app.models.entities import Mission, MissionStatus
+
+            async with SessionLocal() as db:
+                # Fetch last completed mission deliverable
+                result = await db.execute(
+                    select(Mission)
+                    .where(
+                        Mission.company_id == company.id,
+                        Mission.status == MissionStatus.COMPLETED,
+                    )
+                    .order_by(Mission.completed_at.desc())
+                    .limit(1)
+                )
+                last_mission = result.scalar_one_or_none()
+                deliverable_excerpt = ""
+                if last_mission and last_mission.result:
+                    deliverable_excerpt = last_mission.result[:1500]
+
+                # Fetch quest chain progress summary
+                chain_result = await db.execute(
+                    select(QuestStep)
+                    .where(QuestStep.company_id == company.id)
+                    .order_by(QuestStep.step_number)
+                )
+                steps = list(chain_result.scalars().all())
+                done = [s for s in steps if s.status == QuestStepStatus.COMPLETED]
+                available = [s for s in steps if s.status == QuestStepStatus.AVAILABLE]
+                chain_summary = (
+                    f"Etapes completees ({len(done)}/{len(steps)}) : "
+                    + ", ".join(s.title for s in done)
+                    + (f" | Disponibles : " + ", ".join(s.title for s in available) if available else "")
+                )
+
+                # Build a rich mission statement for the CEO prompt
+                ceo_mission_statement = (
+                    f'Etape venant d\'etre completee : "{completed_step_title}". '
+                    f"{chain_summary}. "
+                    f"Livrable produit :\n{deliverable_excerpt}"
+                )
+
+                agent_result = await execute_agent(
+                    agent_type=AgentType.ORCHESTRATOR,
+                    mission_type="ceo_next_move",
+                    company_name=company.name,
+                    mission_statement=ceo_mission_statement,
+                    product_description=company.product_description,
+                    target_audience=company.target_audience,
+                    business_type=company.business_type.value,
+                    company_id=company.id,
+                    company_slug=company.slug or "default",
+                )
+
+                db.add(CompanyNotification(
+                    company_id=company.id,
+                    type=NotificationType.CEO_NEXT_MOVE,
+                    title=f"CEO · Prochain move après « {completed_step_title} »",
+                    message=agent_result.content[:2000],
+                ))
+                await db.commit()
+                logger.info("ceo_next_move_generated", company_id=company.id, step=completed_step_title)
+
+        except Exception as exc:
+            logger.warning("ceo_next_move_failed", company_id=company.id, error=str(exc))
 
     # ------------------------------------------------------------------
     # Auto-launch available steps (callable from API too)

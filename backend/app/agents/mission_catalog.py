@@ -72,6 +72,18 @@ MISSION_CATALOG: dict[str, MissionCatalogItem] = {
         max_context_tokens=2000,
     ),
     # --- QG (Orchestrator) ---
+    "ceo_next_move": MissionCatalogItem(
+        mission_type="ceo_next_move",
+        agent_type=AgentType.ORCHESTRATOR,
+        title="Next Move CEO",
+        description="Analyse le livrable et decide la prochaine action strategique.",
+        credits_cost=0,
+        estimated_minutes=1,
+        output_format="markdown",
+        complexity=1,
+        max_tool_iterations=0,
+        max_context_tokens=3000,
+    ),
     "morning_plan": MissionCatalogItem(
         mission_type="morning_plan",
         agent_type=AgentType.ORCHESTRATOR,
@@ -366,3 +378,98 @@ def get_suggested_split(mission_type: str) -> list[dict]:
         for mt in sub_types
         if mt in MISSION_CATALOG
     ]
+
+
+# ---------------------------------------------------------------------------
+# P1 — Dynamic routing: find_agent_for_task()
+# Polsia-style: given a task description/tag, return the best AgentType.
+# Phase 1: static keyword routing (fast, no LLM cost).
+# Phase 2 (future): LLM routing for ambiguous tasks.
+# ---------------------------------------------------------------------------
+
+_TAG_TO_AGENT: dict[str, AgentType] = {
+    # Engineering / infra / code
+    "engineering": AgentType.BUILDER,
+    "code": AgentType.BUILDER,
+    "deploy": AgentType.BUILDER,
+    "infra": AgentType.BUILDER,
+    "landing": AgentType.BUILDER,
+    "page": AgentType.BUILDER,
+    "build": AgentType.BUILDER,
+    # Research / intel
+    "research": AgentType.RESEARCHER,
+    "market": AgentType.RESEARCHER,
+    "competitor": AgentType.RESEARCHER,
+    "sourcing": AgentType.RESEARCHER,
+    "supplier": AgentType.RESEARCHER,
+    "data": AgentType.RESEARCHER,
+    # Marketing / ads
+    "ads": AgentType.MARKETER,
+    "meta_ads": AgentType.MARKETER,
+    "advertising": AgentType.MARKETER,
+    "paid": AgentType.MARKETER,
+    "launch": AgentType.MARKETER,
+    "aso": AgentType.MARKETER,
+    # Content / creation
+    "content": AgentType.CONTENT,
+    "brand": AgentType.CONTENT,
+    "design": AgentType.CONTENT,
+    "social": AgentType.CONTENT,
+    "image": AgentType.CONTENT,
+    "organic": AgentType.CONTENT,
+    # Outreach / community
+    "outreach": AgentType.OUTREACH,
+    "community": AgentType.OUTREACH,
+    "email": AgentType.OUTREACH,
+    "cold": AgentType.OUTREACH,
+    # Support
+    "support": AgentType.SUPPORT,
+    "inbox": AgentType.SUPPORT,
+    "ticket": AgentType.SUPPORT,
+    # Finance
+    "finance": AgentType.FINANCE,
+    "payment": AgentType.FINANCE,
+    "stripe": AgentType.FINANCE,
+    "revenue": AgentType.FINANCE,
+    # Orchestration / strategy
+    "orchestrator": AgentType.ORCHESTRATOR,
+    "strategy": AgentType.ORCHESTRATOR,
+    "analytics": AgentType.ORCHESTRATOR,
+    "audit": AgentType.ORCHESTRATOR,
+    "growth": AgentType.ORCHESTRATOR,
+    "ceo": AgentType.ORCHESTRATOR,
+}
+
+
+def find_agent_for_task(
+    task_tag: str = "",
+    mission_type: str = "",
+) -> AgentType:
+    """Return the best AgentType for a given task.
+
+    Priority:
+    1. Exact match in MISSION_CATALOG (mission_type → agent_type)
+    2. Keyword match in _TAG_TO_AGENT (task_tag → agent_type)
+    3. Fallback: ORCHESTRATOR
+
+    Usage:
+        agent = find_agent_for_task(task_tag="meta_ads")      # → MARKETER
+        agent = find_agent_for_task(mission_type="landing_page")  # → BUILDER
+    """
+    # 1. Catalog exact match
+    if mission_type and mission_type in MISSION_CATALOG:
+        return MISSION_CATALOG[mission_type].agent_type
+
+    # 2. Keyword match (longest match wins)
+    tag = (task_tag or mission_type or "").lower().replace("-", "_").replace(" ", "_")
+    best: AgentType | None = None
+    best_len = 0
+    for keyword, agent_type in _TAG_TO_AGENT.items():
+        if keyword in tag and len(keyword) > best_len:
+            best = agent_type
+            best_len = len(keyword)
+    if best:
+        return best
+
+    # 3. Fallback
+    return AgentType.ORCHESTRATOR

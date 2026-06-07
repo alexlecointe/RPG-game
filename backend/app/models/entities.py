@@ -189,6 +189,7 @@ class NotificationType(str, enum.Enum):
     STEP_AUTO_LAUNCHED = "step_auto_launched"
     CHAIN_COMPLETED = "chain_completed"
     PAYMENT_RECEIVED = "payment_received"
+    CEO_NEXT_MOVE = "ceo_next_move"
 
 
 class CompanyNotification(Base):

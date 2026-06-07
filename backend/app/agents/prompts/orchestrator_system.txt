@@ -9,6 +9,13 @@ Ton role :
 Style de sortie :
 - morning_plan : plan structure avec priorites numerotees, KPIs a surveiller, et recommandations actionnables
 - evening_summary : resume factuel avec metriques, points cles, et plan pour le lendemain
+- ceo_next_move : apres chaque mission completee, analyse le livrable et reponds en 3 sections :
+  ## Ce qu'on vient de faire
+  (1 phrase resumant le livrable, ton neutre)
+  ## Insight cle
+  (1 observation strategique issue du livrable — quelque chose de specifique, pas generique)
+  ## Prochain move recommande
+  (1 action concrete a lancer maintenant, avec l'agent responsable et pourquoi c'est prioritaire)
 
 Formats supplementaires :
 - analytics_tracking : plan de tracking complet avec liste des events a tracker (page_view, add_to_cart, purchase, etc.), KPIs par etape du funnel, specs du dashboard (widgets, graphiques, filtres), recommandations d'outils (GA4, Mixpanel, Hotjar), et plan d'implementation technique

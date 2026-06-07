@@ -129,6 +129,105 @@ async def sage_chat(company_id: str, body: SageMessageIn, db: DbSession):
         return SageMessageOut(reply=_mock_reply(body.message, quest_steps))
 
 
+class SageDailyBrief(BaseModel):
+    brief: str
+    recommended_action: str
+    progress_pct: float
+
+
+@router.get("/companies/{company_id}/sage/daily-brief", response_model=SageDailyBrief)
+async def sage_daily_brief(company_id: str, db: DbSession):
+    """P2 — Proactive Sage: generates a daily brief without user input.
+
+    Call this on app open or via background refresh to give the user
+    a Polsia-style 'CEO daily cycle' insight.
+    """
+    result = await db.execute(
+        select(Company)
+        .where(Company.id == company_id)
+        .options(selectinload(Company.buildings))
+    )
+    company = result.scalar_one_or_none()
+    if not company:
+        raise HTTPException(404, "Company not found")
+
+    quest_result = await db.execute(
+        select(QuestStep)
+        .where(QuestStep.company_id == company_id)
+        .order_by(QuestStep.step_number)
+    )
+    quest_steps = list(quest_result.scalars().all())
+
+    mission_result = await db.execute(
+        select(Mission)
+        .where(Mission.company_id == company_id)
+        .order_by(Mission.created_at.desc())
+        .limit(10)
+    )
+    missions = list(mission_result.scalars().all())
+
+    completed = [s for s in quest_steps if s.status == QuestStepStatus.COMPLETED]
+    available = [s for s in quest_steps if s.status == QuestStepStatus.AVAILABLE]
+    running = [s for s in quest_steps if s.status == QuestStepStatus.RUNNING]
+
+    progress_pct = round(len(completed) / len(quest_steps) * 100, 1) if quest_steps else 0.0
+
+    settings = get_settings()
+    if settings.agent_mode == "mock" or (not settings.anthropic_api_key and not settings.openai_api_key):
+        recommended = available[0].title if available else (running[0].title if running else "Continuer la progression")
+        return SageDailyBrief(
+            brief=f"Progression : {len(completed)}/{len(quest_steps)} étapes. {'Mission en cours : ' + running[0].title if running else 'Prêt pour la prochaine étape.'}",
+            recommended_action=recommended,
+            progress_pct=progress_pct,
+        )
+
+    # Build proactive prompt
+    last_deliverable = ""
+    for m in missions:
+        if m.status == MissionStatus.COMPLETED and m.deliverable:
+            last_deliverable = f"\nDernier livrable ({m.mission_type}) : {m.deliverable[:600]}"
+            break
+
+    proactive_prompt = f"""Tu es Le Sage de {company.name}. Génère un daily brief proactif en 3 parties COURTES :
+
+**État du business :**
+- Business : {company.business_type.value} | {company.name}
+- Mission : {company.mission_statement or 'Non définie'}
+- Progression : {len(completed)}/{len(quest_steps)} étapes ({progress_pct}%)
+- En cours : {', '.join(s.title for s in running) if running else 'rien'}
+- Disponibles : {', '.join(s.title for s in available) if available else 'rien'}
+{last_deliverable}
+
+Réponds en JSON avec ces 3 clés exactes :
+{{"brief": "2-3 phrases sur l'état actuel et un insight stratégique", "recommended_action": "1 action concrète à faire maintenant (max 15 mots)"}}
+
+Sois direct, concis, actionnable. En français."""
+
+    try:
+        messages = [{"role": "user", "content": proactive_prompt}]
+        raw = await _call_llm(messages, settings)
+
+        import json as _json
+        # Try to parse JSON from LLM response
+        cleaned = raw.strip()
+        if "```" in cleaned:
+            cleaned = cleaned.split("```")[1].replace("json", "").strip()
+        parsed = _json.loads(cleaned)
+        return SageDailyBrief(
+            brief=parsed.get("brief", ""),
+            recommended_action=parsed.get("recommended_action", ""),
+            progress_pct=progress_pct,
+        )
+    except Exception:
+        # Fallback if LLM doesn't return valid JSON
+        recommended = available[0].title if available else (running[0].title if running else "Continuer")
+        return SageDailyBrief(
+            brief=f"{len(completed)}/{len(quest_steps)} étapes complétées. {('En cours : ' + running[0].title) if running else 'Des étapes sont disponibles.'}",
+            recommended_action=recommended,
+            progress_pct=progress_pct,
+        )
+
+
 def _mock_reply(message: str, quest_steps: list[QuestStep]) -> str:
     available = [s for s in quest_steps if s.status == QuestStepStatus.AVAILABLE]
     running = [s for s in quest_steps if s.status == QuestStepStatus.RUNNING]
