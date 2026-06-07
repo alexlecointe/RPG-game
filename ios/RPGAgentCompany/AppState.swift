@@ -345,7 +345,9 @@ final class AppState: ObservableObject {
                 lootToPresent = finalMission
             } else if let finalMission = missions.first(where: { $0.id == missionId }) {
                 // #region agent log
-                print("[DEBUG-H3] pollUntilComplete: timeout fallback — mission status=\(finalMission.status) deliverable=\(finalMission.deliverable == nil ? "NIL" : "'\(String(finalMission.deliverable!.prefix(40)))')")
+                let fbStatus = finalMission.status
+                let fbDeliverable = finalMission.deliverable.map { String($0.prefix(40)) } ?? "NIL"
+                print("[DEBUG-H3] pollUntilComplete: timeout fallback — status=\(fbStatus) deliverable=\(fbDeliverable)")
                 // #endregion
             }
         }
