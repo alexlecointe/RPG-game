@@ -42,20 +42,22 @@ final class APIClient {
 
     private static let baseURLKey = "rpg_api_base_url"
 
+    private static let productionURL = "https://rpg-agent-api.onrender.com/api/v1"
+
     #if targetEnvironment(simulator)
-    private static let defaultHost = "127.0.0.1"
+    private static let localURL = "http://127.0.0.1:8080/api/v1"
     #else
-    private static let defaultHost = "192.168.1.15"
+    private static let localURL = "http://192.168.1.15:8080/api/v1"
     #endif
 
     var baseURL: String {
         if let custom = UserDefaults.standard.string(forKey: Self.baseURLKey), !custom.isEmpty {
             return custom
         }
-        return "http://\(Self.defaultHost):8080/api/v1"
+        return Self.productionURL
     }
 
-    var apiKey = "dev-local-key-change-in-production"
+    var apiKey = "rpg-prod-key-2026"
 
     private lazy var session: URLSession = {
         let config = URLSessionConfiguration.default
