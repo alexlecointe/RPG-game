@@ -503,7 +503,24 @@ async def _call_anthropic(
         messages.append({"role": "assistant", "content": response.content})
         messages.append({"role": "user", "content": tool_results})
 
+    # Tool loop exhausted — last response still has tool_use blocks.
+    # Force one final call without tools to get the synthesis.
     text_parts = [b.text for b in response.content if hasattr(b, "text")]
+    if not text_parts:
+        logger.info("tool_loop_exhausted_forcing_synthesis", provider="anthropic")
+        synth_response, synth_latency = await call_anthropic_raw(
+            system_prompt, messages, max_tokens=4096,
+            tools=None, timeout_s=COMPLEX_TIMEOUT_S,
+        )
+        text_parts = [b.text for b in synth_response.content if hasattr(b, "text")]
+        synth_usage = synth_response.usage
+        all_token_stats.append(TokenStats(
+            provider="anthropic",
+            model=use_model,
+            input_tokens=synth_usage.input_tokens,
+            output_tokens=synth_usage.output_tokens,
+            total_tokens=synth_usage.input_tokens + synth_usage.output_tokens,
+        ))
     return AgentResult(
         format=output_format,
         content="\n".join(text_parts),
@@ -603,7 +620,24 @@ async def _call_openai(
                 "content": result_str,
             })
 
+    # Tool loop exhausted — last response had tool_calls, force final synthesis.
     content = choice.message.content or ""
+    if not content and tool_calls_log:
+        logger.info("tool_loop_exhausted_forcing_synthesis", provider="openai")
+        synth_response, _ = await call_openai_raw(
+            system_prompt, user_prompt,
+            messages=messages, max_tokens=4096,
+            tools=None, timeout_s=COMPLEX_TIMEOUT_S,
+        )
+        content = synth_response.choices[0].message.content or ""
+        if synth_response.usage:
+            all_token_stats.append(TokenStats(
+                provider="openai",
+                model=use_model,
+                input_tokens=synth_response.usage.prompt_tokens,
+                output_tokens=synth_response.usage.completion_tokens,
+                total_tokens=synth_response.usage.total_tokens,
+            ))
     return AgentResult(
         format=output_format,
         content=content,
