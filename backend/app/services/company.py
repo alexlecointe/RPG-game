@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import uuid
 
 import structlog
 from sqlalchemy import select
@@ -28,11 +29,28 @@ class CompanyService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
+    async def _slug_exists(self, slug: str) -> bool:
+        result = await self.db.execute(
+            select(Company.id).where(Company.slug == slug).limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
+    async def _ensure_unique_slug(self, name: str) -> str:
+        base = _slugify(name)
+        if not await self._slug_exists(base):
+            return base
+        for i in range(2, 100):
+            candidate = f"{base[:90]}-{i}"
+            if not await self._slug_exists(candidate):
+                return candidate
+        return f"{base[:80]}-{uuid.uuid4().hex[:8]}"
+
     async def create_company(self, user_id: str, data: CompanyCreate) -> Company:
+        slug = await self._ensure_unique_slug(data.name)
         company = Company(
             user_id=user_id,
             name=data.name,
-            slug=_slugify(data.name),
+            slug=slug,
             mission_statement=data.mission_statement,
             product_description=data.product_description,
             target_audience=data.target_audience,
