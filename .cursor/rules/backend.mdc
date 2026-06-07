@@ -1,0 +1,42 @@
+---
+description: Contexte specifique au backend Python
+globs: backend/**
+alwaysApply: false
+---
+
+# Backend -- Guide rapide
+
+## Stack
+- Python 3.11+, FastAPI, SQLAlchemy async, SQLite (aiosqlite)
+- Virtualenv dans `backend/.venv/` -- activer avec `source backend/.venv/bin/activate`
+- Lancer le serveur : `cd backend && uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload`
+
+## Modeles (entities.py)
+- `BusinessType` : ecommerce | app | saas
+- `AgentType` : builder | marketer | researcher | orchestrator | outreach | support | finance | content
+- `Company` a un `business_type`, des `buildings`, un `wallet`, des `missions` et des `quest_steps`
+- DB auto-create avec `create_all`, pas d'Alembic
+
+## Quest Chains (quest_chain.py)
+3 quest chains distinctes, NE PAS relire le fichier entier sauf si on modifie les chains :
+- ECOMMERCE_CHAIN : 12 etapes (market_scan -> optimization_audit)
+- APP_CHAIN : 10 etapes (market_scan -> growth_loop), pas de finance
+- SAAS_CHAIN : 11 etapes (market_scan -> optimization_audit), inclut cold_outbound et content_seo
+
+## Mission Catalog (mission_catalog.py)
+Dict de ~25 MissionCatalogItem. Chaque mission a : mission_type, agent_type, title, credits_cost, output_format.
+NE PAS relire le fichier entier sauf si on ajoute/modifie des missions.
+
+## API Endpoints
+- POST /companies/{user_id} -- creer company
+- GET /companies/{company_id} -- get company
+- POST /companies/{company_id}/missions -- lancer mission
+- GET /companies/{company_id}/quest-chain -- get quest chain
+- POST /companies/{company_id}/quest-chain/{step}/start -- lancer quest step
+- GET /companies/{company_id}/activity-feed -- logs agents
+- POST /companies/{company_id}/sage -- chat IA avec le Sage
+
+## Agents / LLM
+- `executor.py` route vers Anthropic ou OpenAI selon PROVIDER_ROUTING
+- Mode mock disponible (agent_mode=mock dans .env)
+- Prompts systeme dans `agents/prompts/{agent_type}_system.txt`

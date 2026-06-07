@@ -1,0 +1,76 @@
+---
+description: Architecture et contexte du projet RPG Agent Company
+globs:
+alwaysApply: true
+---
+
+# RPG Agent Company -- Contexte Projet
+
+## Vue d'ensemble
+
+App iOS (SwiftUI + SpriteKit) avec backend Python (FastAPI + SQLAlchemy async). Le joueur gere une company comme un village RPG : des agents IA executent des missions business (etude marche, landing page, ads, etc.).
+
+## Architecture Backend (`backend/`)
+
+- **Framework** : FastAPI, SQLAlchemy async, SQLite (aiosqlite)
+- **Entrypoint** : `backend/app/main.py`
+- **DB** : auto-create via `Base.metadata.create_all` (pas d'Alembic)
+- **Config** : `backend/app/core/config.py` (pydantic-settings, `.env`)
+- **LLM** : OpenAI + Anthropic avec fallback mock (`backend/app/agents/executor.py`)
+
+### Structure cle
+```
+backend/app/
+  models/entities.py    -- SQLAlchemy models (Company, Building, Mission, QuestStep, MissionLog)
+  schemas/api.py        -- Pydantic schemas (CompanyCreate/Out, MissionOut, etc.)
+  services/             -- Business logic (company.py, mission.py, quest_chain.py, wallet.py)
+  agents/               -- LLM agents (executor.py, mission_catalog.py, prompts/)
+  api/v1/               -- FastAPI routers (companies, missions, quest_chain, sage, etc.)
+  workers/runner.py     -- Async mission execution (fire-and-forget)
+```
+
+### Concepts cles backend
+- **BusinessType** : enum (ecommerce, app, saas) sur Company -- determine la quest chain, les buildings et les missions
+- **Quest Chain** : 3 definitions distinctes dans `quest_chain.py` (ECOMMERCE_CHAIN, APP_CHAIN, SAAS_CHAIN)
+- **Buildings** : conditionnels selon business_type (App n'a pas Finance)
+- **Sage Chat** : endpoint `/companies/{id}/sage` avec contexte complet company + LLM
+
+## Architecture iOS (`ios/RPGAgentCompany/`)
+
+- **Framework** : SwiftUI + SpriteKit (village 2D pixel art)
+- **State** : `AppState.swift` (@MainActor ObservableObject central)
+- **API** : `Services/APIClient.swift` (singleton, async/await)
+- **Models** : `Models/Models.swift` (Codable structs : Company, Building, Mission, QuestStep, BusinessType enum, etc.)
+
+### Structure cle
+```
+ios/RPGAgentCompany/
+  AppState.swift              -- Etat central (@Published)
+  Models/Models.swift         -- Tous les modeles Codable
+  Services/APIClient.swift    -- Client HTTP
+  Views/
+    OnboardingView.swift      -- Onboarding avec choix business type
+    QuestChainView.swift      -- Quest chain (header dynamique par business type)
+    SageChatView.swift        -- Chat IA avec le Sage
+    Missions/MissionJournalView.swift -- Journal (Activite, Docs, Stats)
+    Game/GameContainerView.swift     -- Container SpriteKit + HUD + dialogues
+  Game/
+    GameScene.swift           -- Scene SpriteKit principale
+    VillageMap.swift           -- Map statique (buildings, NPCs, dialogues)
+    PlayerSprite.swift         -- Joueur avec deplacement
+  Theme/PixelTheme.swift      -- Design system (couleurs, fonts, styles)
+```
+
+### Concepts cles iOS
+- **VillageMap** : definitions statiques des buildings/NPCs, filtrables par `activeAgentTypes`
+- **Dialogue system** : `DialoguePage` avec `DialogueAction` (close, openQuests, openSageChat)
+- **Activity Feed** : polling backend `/activity-feed` pour logs agents temps reel
+
+## Regles de dev
+
+- Toujours repondre en francais
+- Le backend utilise `create_all` : pas besoin d'Alembic, les nouvelles colonnes sont creees au demarrage
+- Ne JAMAIS modifier les fichiers dans `backend/.venv/`
+- Les prompts systeme des agents sont dans `backend/app/agents/prompts/`
+- Chaque agent type a un building associe (voir BUILDING_NAMES dans quest_chain.py)
+- Le `.cursorignore` exclut venv, .venv, __pycache__ -- ne pas les indexer

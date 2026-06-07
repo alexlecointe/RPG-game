@@ -1,0 +1,45 @@
+---
+description: Contexte specifique a l'app iOS SwiftUI + SpriteKit
+globs: ios/**
+alwaysApply: false
+---
+
+# iOS -- Guide rapide
+
+## Stack
+- SwiftUI + SpriteKit, iOS 17+, pas de packages externes (SPM)
+- Projet Xcode dans `ios/RPGAgentCompany.xcodeproj`
+
+## Etat central : AppState.swift
+- @MainActor ObservableObject avec @Published
+- Proprietes cles : company, missions, questChain, sageMessages, agentActivityFeed
+- Methodes : createNewCompany, refreshCompany, startQuestStep, sendSageMessage, fetchActivityFeed
+
+## Modeles : Models.swift
+- `BusinessType` enum (ecommerce, app, saas) avec computed properties (displayName, questChainTitle, dependencyGraph, icon)
+- `Company` inclut businessType, buildings, wallet
+- `SageMessage`, `ActivityFeedEntry`, `QuestStep`, `Mission`, `MissionCatalogItem`
+
+## API : APIClient.swift
+- Singleton `APIClient.shared`, base URL configurable
+- Methodes async/await pour chaque endpoint backend
+- Auth via header X-API-Key
+
+## Views principales
+- `OnboardingView` : welcome -> businessType -> nameInput -> detailInput -> agentsWorking
+- `GameContainerView` : SpriteKit scene + HUD + dialogue overlay + sheets (journal, quests, sage chat)
+- `QuestChainView` : header dynamique par businessType, liste des etapes
+- `MissionJournalView` : 3 onglets (Activite, Docs, Stats)
+- `SageChatView` : chat IA avec bulles, input bar, typing indicator
+- `BuildingDetailView` : detail d'un batiment avec missions
+
+## Game (SpriteKit)
+- `GameScene` : scene principale, buildings/NPCs filtres par `activeAgentTypes`
+- `VillageMap` : definitions statiques (BuildingDef, NPCDef, DialoguePage). NE PAS relire entierement sauf si on modifie la carte
+- `PlayerSprite` : deplacement avec joystick virtuel
+- Dialogue system : DialoguePage avec actions (close, openQuests, openSageChat)
+
+## Theme : PixelTheme.swift
+- Couleurs : accent (gold), accentGreen, accentRed, accentBlue, accentPurple, bgDark, bgMedium, bgLight
+- Fonts : titleFont, headlineFont, bodyFont, captionFont, microFont
+- Composants : PixelButtonStyle, pixelCard(), PixelProgressBar

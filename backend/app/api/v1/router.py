@@ -1,0 +1,19 @@
+from fastapi import APIRouter
+
+from app.api.v1 import admin, buildings, catalog, companies, daily_reward, health, missions, notifications, quest_chain, sage, shop, token_usage, users, webhooks
+
+api_router = APIRouter()
+api_router.include_router(health.router, tags=["health"])
+api_router.include_router(users.router, prefix="/users", tags=["users"])
+api_router.include_router(companies.router, prefix="/companies", tags=["companies"])
+api_router.include_router(catalog.router, prefix="/catalog", tags=["catalog"])
+api_router.include_router(missions.router, tags=["missions"])
+api_router.include_router(buildings.router, tags=["buildings"])
+api_router.include_router(daily_reward.router, tags=["daily-reward"])
+api_router.include_router(quest_chain.router, tags=["quest-chain"])
+api_router.include_router(sage.router, tags=["sage"])
+api_router.include_router(notifications.router, tags=["notifications"])
+api_router.include_router(webhooks.router, tags=["webhooks"])
+api_router.include_router(token_usage.router, tags=["token-usage"])
+api_router.include_router(admin.router, tags=["admin"])
+api_router.include_router(shop.router, tags=["shop"])

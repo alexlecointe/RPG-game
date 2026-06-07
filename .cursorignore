@@ -1,0 +1,27 @@
+# Python virtualenvs
+backend/venv/
+backend/.venv/
+**/venv/
+**/.venv/
+
+# Python cache
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# iOS build artifacts
+ios/DerivedData/
+ios/**/xcuserdata/
+
+# IDE / system
+.DS_Store
+.pytest_cache/
+.ruff_cache/
+
+# Database
+*.db

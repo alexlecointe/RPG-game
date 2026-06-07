@@ -1,0 +1,309 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Literal, Optional
+
+from pydantic import BaseModel, Field
+
+from app.models.entities import AgentType, BusinessType, MissionStatus, QuestStepStatus
+
+
+class UserCreate(BaseModel):
+    device_id: str = Field(..., min_length=1, max_length=255)
+
+
+class UserOut(BaseModel):
+    id: str
+    device_id: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class CompanyCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=200)
+    mission_statement: str = ""
+    product_description: str = ""
+    target_audience: str = ""
+    competitor_url: Optional[str] = None
+    business_type: BusinessType = BusinessType.ECOMMERCE
+
+
+class BuildingOut(BaseModel):
+    id: str
+    agent_type: AgentType
+    level: int
+
+    model_config = {"from_attributes": True}
+
+
+class WalletOut(BaseModel):
+    credits_balance: int
+    credits_cap: int
+    daily_free_credits: int
+
+    model_config = {"from_attributes": True}
+
+
+class CompanyOut(BaseModel):
+    id: str
+    name: str
+    mission_statement: str
+    product_description: str
+    target_audience: str
+    business_type: BusinessType
+    level: int
+    xp: int
+    buildings: list[BuildingOut]
+    wallet: WalletOut
+
+    model_config = {"from_attributes": True}
+
+
+class MissionCatalogItem(BaseModel):
+    mission_type: str
+    agent_type: AgentType
+    title: str
+    description: str
+    credits_cost: int
+    estimated_minutes: int
+    output_format: Literal["html", "markdown", "json"]
+    complexity: int = 3  # 1-5, tasks above 5 are rejected (Polsia pattern)
+    max_images: int = 20
+    max_tool_iterations: int = 5
+    max_context_tokens: int = 4000
+    preferred_provider: str = ""
+    preferred_model: str = ""
+
+
+class MissionCreate(BaseModel):
+    mission_type: str = Field(..., min_length=1, max_length=64)
+
+
+class MissionOut(BaseModel):
+    id: str
+    company_id: str
+    agent_type: AgentType
+    mission_type: str
+    status: MissionStatus
+    credits_cost: int
+    xp_reward: int
+    deliverable_format: Optional[str]
+    deliverable: Optional[str]
+    quality_score: Optional[float] = None
+    error_message: Optional[str]
+    started_at: Optional[datetime]
+    completed_at: Optional[datetime]
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class MissionLogOut(BaseModel):
+    step: str
+    message: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class DailyRewardOut(BaseModel):
+    credits_awarded: int
+    streak: int
+    bonus_active: bool
+
+
+class ActivityFeedOut(BaseModel):
+    mission_id: str
+    agent_type: AgentType
+    mission_type: str
+    mission_status: MissionStatus
+    step: str
+    message: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class MissionSplitItem(BaseModel):
+    mission_type: str
+    title: str
+    credits_cost: int
+    complexity: int
+
+
+class MissionPreviewOut(BaseModel):
+    mission_type: str
+    title: str
+    description: str
+    credits_cost: int
+    credits_remaining: int
+    can_afford: bool
+    estimated_minutes: int
+    complexity: int
+    max_images: int
+    agent_type: AgentType
+    suggested_split: list[MissionSplitItem] = []
+
+
+class RecurringMissionCreate(BaseModel):
+    mission_type: str = Field(..., min_length=1, max_length=64)
+    frequency: Literal["daily", "weekly", "monthly"]
+    day_of_week: Optional[int] = Field(None, ge=0, le=6)
+    day_of_month: Optional[int] = Field(None, ge=1, le=28)
+    hour_utc: int = Field(9, ge=0, le=23)
+
+
+class RecurringMissionOut(BaseModel):
+    id: str
+    company_id: str
+    mission_type: str
+    frequency: str
+    day_of_week: Optional[int]
+    day_of_month: Optional[int]
+    hour_utc: int
+    is_active: bool
+    last_run_at: Optional[datetime]
+    next_run_at: Optional[datetime]
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Admin Dashboard
+# ---------------------------------------------------------------------------
+
+
+class AdminOverview(BaseModel):
+    total_companies: int
+    total_missions: int
+    missions_by_status: dict[str, int]
+    total_tokens: int
+    total_cost_usd: float
+    error_rate: float
+    period_days: int
+
+
+class AdminCompanyRow(BaseModel):
+    id: str
+    name: str
+    business_type: str
+    level: int
+    mission_count: int
+    total_tokens: int
+    total_cost_usd: float
+    avg_quality_score: Optional[float]
+    last_mission_at: Optional[datetime]
+    created_at: datetime
+
+
+class AdminMissionRow(BaseModel):
+    id: str
+    company_id: str
+    company_name: str
+    mission_type: str
+    agent_type: AgentType
+    status: MissionStatus
+    quality_score: Optional[float]
+    token_cost_usd: float
+    error_message: Optional[str]
+    created_at: datetime
+    completed_at: Optional[datetime]
+
+
+class AdminTokenSpendRow(BaseModel):
+    date: str
+    provider: str
+    model: str
+    total_tokens: int
+    total_cost_usd: float
+    call_count: int
+
+
+class AdminErrorRow(BaseModel):
+    id: str
+    company_id: str
+    company_name: str
+    mission_type: str
+    error_message: Optional[str]
+    created_at: datetime
+
+
+class AdminToolUsageRow(BaseModel):
+    tool_name: str
+    total_calls: int
+    error_count: int
+    error_rate: float
+    avg_duration_ms: float
+
+
+# ---------------------------------------------------------------------------
+# Skill Shop
+# ---------------------------------------------------------------------------
+
+
+class SkillShopItemOut(BaseModel):
+    id: str
+    mission_type: str
+    tier: str
+    title: str
+    description: str
+    credits_cost: int
+    icon: str
+    preview_benefits: Optional[str]
+    owned: bool = False
+
+    model_config = {"from_attributes": True}
+
+
+class CompanySkillOut(BaseModel):
+    id: str
+    mission_type: str
+    tier: str
+    title: str
+    icon: str
+    purchased_at: datetime
+    times_used: int
+
+    model_config = {"from_attributes": True}
+
+
+class SkillPurchaseOut(BaseModel):
+    success: bool
+    skill: CompanySkillOut
+    credits_remaining: int
+
+
+class BetaFeedbackCreate(BaseModel):
+    mission_id: Optional[str] = None
+    mission_type: str = Field("", max_length=64)
+    used_deliverable: bool = False
+    rating: int = Field(3, ge=1, le=5)
+    comment: str = Field("", max_length=500)
+
+
+class BetaFeedbackOut(BaseModel):
+    id: str
+    mission_type: str
+    used_deliverable: bool
+    rating: int
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class QuestStepOut(BaseModel):
+    id: str
+    step_number: int
+    mission_type: str
+    title: str
+    description: str
+    agent_type: AgentType
+    status: QuestStepStatus
+    mission_id: Optional[str]
+    building_name: str = ""
+    unlocked_at: Optional[datetime]
+    completed_at: Optional[datetime]
+
+    model_config = {"from_attributes": True}
