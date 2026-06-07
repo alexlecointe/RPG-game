@@ -66,6 +66,14 @@ final class APIClient {
         return URLSession(configuration: config)
     }()
 
+    /// Session longue durée pour les appels LLM (quêtes, missions, Sage)
+    private lazy var longSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 120
+        config.timeoutIntervalForResource = 180
+        return URLSession(configuration: config)
+    }()
+
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
 
@@ -214,7 +222,7 @@ final class APIClient {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await longSession.data(for: request)
         try validate(response: response, data: data)
         return try decoder.decode(T.self, from: data)
     }
@@ -253,7 +261,7 @@ final class APIClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await longSession.data(for: request)
         try validate(response: response, data: data)
         return try decoder.decode(T.self, from: data)
     }
