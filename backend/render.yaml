@@ -1,14 +1,11 @@
-databases: []
-
 services:
-  # --- FastAPI API server ---
   - type: web
     name: rpg-agent-api
     runtime: python
-    plan: starter
+    plan: free
     rootDir: backend
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 2
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
     healthCheckPath: /api/v1/health
     envVars:
       - key: APP_ENV
@@ -17,156 +14,13 @@ services:
         value: auto
       - key: TOOLS_ENABLED
         value: "true"
-      - key: DATABASE_URL
-        fromGroup: rpg-shared
-      - key: REDIS_URL
-        fromService:
-          name: rpg-agent-redis
-          type: redis
-          property: connectionString
-      - key: API_KEY
-        fromGroup: rpg-shared
-      - key: OPENAI_API_KEY
-        fromGroup: rpg-shared
       - key: OPENAI_MODEL
         value: gpt-4o-mini
-      - key: ANTHROPIC_API_KEY
-        fromGroup: rpg-shared
       - key: ANTHROPIC_MODEL
         value: claude-sonnet-4-20250514
-      - key: TAVILY_API_KEY
-        fromGroup: rpg-shared
-      - key: REPLICATE_API_TOKEN
-        fromGroup: rpg-shared
-      - key: BROWSERBASE_API_KEY
-        fromGroup: rpg-shared
-      - key: BROWSERBASE_PROJECT_ID
-        fromGroup: rpg-shared
-      - key: SERPAPI_KEY
-        fromGroup: rpg-shared
-      - key: RESEND_API_KEY
-        fromGroup: rpg-shared
-      - key: RESEND_FROM_DOMAIN
-        fromGroup: rpg-shared
-      - key: STRIPE_SECRET_KEY
-        fromGroup: rpg-shared
-      - key: STRIPE_WEBHOOK_SECRET
-        fromGroup: rpg-shared
-      - key: META_PIXEL_ID
-        fromGroup: rpg-shared
-      - key: META_CAPI_TOKEN
-        fromGroup: rpg-shared
-      - key: META_AD_ACCOUNT_ID
-        fromGroup: rpg-shared
-      - key: RENDER_API_KEY
-        fromGroup: rpg-shared
-      - key: NEON_API_KEY
-        fromGroup: rpg-shared
-      - key: GITHUB_TOKEN
-        fromGroup: rpg-shared
-      - key: GITHUB_ORG
-        fromGroup: rpg-shared
-      - key: R2_ACCOUNT_ID
-        fromGroup: rpg-shared
-      - key: R2_ACCESS_KEY_ID
-        fromGroup: rpg-shared
-      - key: R2_SECRET_ACCESS_KEY
-        fromGroup: rpg-shared
-      - key: R2_BUCKET_NAME
-        fromGroup: rpg-shared
-      - key: R2_PUBLIC_URL
-        fromGroup: rpg-shared
-      - key: X_API_KEY
-        fromGroup: rpg-shared
-      - key: X_API_SECRET
-        fromGroup: rpg-shared
-      - key: X_ACCESS_TOKEN
-        fromGroup: rpg-shared
-      - key: X_ACCESS_TOKEN_SECRET
-        fromGroup: rpg-shared
       - key: DAILY_FREE_CREDITS
         value: "50"
       - key: CREDITS_CAP
         value: "150"
       - key: MISSION_REFUND_ON_FAIL_PERCENT
         value: "50"
-
-  # --- Celery background worker ---
-  - type: worker
-    name: rpg-agent-worker
-    runtime: python
-    plan: starter
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: celery -A app.workers.celery_app worker --loglevel=info --queues=missions --concurrency=2
-    envVars:
-      - key: APP_ENV
-        value: production
-      - key: AGENT_MODE
-        value: auto
-      - key: TOOLS_ENABLED
-        value: "true"
-      - key: DATABASE_URL
-        fromGroup: rpg-shared
-      - key: REDIS_URL
-        fromService:
-          name: rpg-agent-redis
-          type: redis
-          property: connectionString
-      - key: OPENAI_API_KEY
-        fromGroup: rpg-shared
-      - key: ANTHROPIC_API_KEY
-        fromGroup: rpg-shared
-      - key: TAVILY_API_KEY
-        fromGroup: rpg-shared
-      - key: REPLICATE_API_TOKEN
-        fromGroup: rpg-shared
-      - key: BROWSERBASE_API_KEY
-        fromGroup: rpg-shared
-      - key: BROWSERBASE_PROJECT_ID
-        fromGroup: rpg-shared
-      - key: SERPAPI_KEY
-        fromGroup: rpg-shared
-      - key: RESEND_API_KEY
-        fromGroup: rpg-shared
-      - key: STRIPE_SECRET_KEY
-        fromGroup: rpg-shared
-      - key: META_PIXEL_ID
-        fromGroup: rpg-shared
-      - key: META_CAPI_TOKEN
-        fromGroup: rpg-shared
-      - key: META_AD_ACCOUNT_ID
-        fromGroup: rpg-shared
-      - key: RENDER_API_KEY
-        fromGroup: rpg-shared
-      - key: NEON_API_KEY
-        fromGroup: rpg-shared
-      - key: GITHUB_TOKEN
-        fromGroup: rpg-shared
-      - key: GITHUB_ORG
-        fromGroup: rpg-shared
-      - key: R2_ACCOUNT_ID
-        fromGroup: rpg-shared
-      - key: R2_ACCESS_KEY_ID
-        fromGroup: rpg-shared
-      - key: R2_SECRET_ACCESS_KEY
-        fromGroup: rpg-shared
-      - key: R2_BUCKET_NAME
-        fromGroup: rpg-shared
-      - key: R2_PUBLIC_URL
-        fromGroup: rpg-shared
-      - key: X_API_KEY
-        fromGroup: rpg-shared
-      - key: X_API_SECRET
-        fromGroup: rpg-shared
-      - key: X_ACCESS_TOKEN
-        fromGroup: rpg-shared
-      - key: X_ACCESS_TOKEN_SECRET
-        fromGroup: rpg-shared
-
-  # --- Redis for Celery task queue ---
-  - type: redis
-    name: rpg-agent-redis
-    plan: free
-    maxmemoryPolicy: allkeys-lru
-    ipAllowList: []

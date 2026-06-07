@@ -32,9 +32,17 @@ else:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    await init_db()
-    from app.agents.skill_shop_catalog import sync_shop_catalog
-    await sync_shop_catalog()
+    import structlog as _sl
+    _log = _sl.get_logger()
+    try:
+        await init_db()
+    except Exception as _exc:
+        _log.warning("startup_db_failed", error=str(_exc))
+    try:
+        from app.agents.skill_shop_catalog import sync_shop_catalog
+        await sync_shop_catalog()
+    except Exception as _exc:
+        _log.warning("startup_catalog_failed", error=str(_exc))
     yield
 
 
