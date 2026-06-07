@@ -53,14 +53,14 @@ struct DeliverableContentBlock: View {
     @State private var showPreview = true
 
     var body: some View {
-        // #region agent log
-        let _ = {
-            let dLen = mission.deliverable?.count ?? -1
-            let dPreview = mission.deliverable.map { String($0.prefix(80)) } ?? "NIL"
-            print("[DEBUG-H4] DeliverableContentBlock.body: deliverable len=\(dLen) preview='\(dPreview)'")
-        }()
-        // #endregion
         VStack(alignment: .leading, spacing: 10) {
+            // #region agent log
+            Color.clear.frame(height: 0).onAppear {
+                let dLen = mission.deliverable?.count ?? -1
+                let dPreview = mission.deliverable.map { String($0.prefix(80)) } ?? "NIL"
+                print("[DEBUG-H4] DeliverableContentBlock.onAppear: deliverable len=\(dLen) preview='\(dPreview)' format=\(mission.deliverableFormat ?? "nil")")
+            }
+            // #endregion
             if let content = mission.deliverable {
                 let summary = DeliverableHelper.executiveSummary(from: content)
                 if !summary.isEmpty && mission.deliverableFormat != "html" {
