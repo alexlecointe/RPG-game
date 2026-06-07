@@ -46,6 +46,11 @@ struct LootRevealView: View {
             .toolbarBackground(PixelTheme.bgMedium, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .onAppear {
+                // #region agent log
+                let dLen = mission.deliverable?.count ?? -1
+                let dPreview = mission.deliverable.map { String($0.prefix(100)) } ?? "NIL"
+                print("[DEBUG-H2] LootRevealView.onAppear: missionId=\(mission.id) deliverable len=\(dLen) preview='\(dPreview)' format=\(mission.deliverableFormat ?? "nil")")
+                // #endregion
                 AnalyticsTracker.track("deliverable_viewed", properties: [
                     "mission_type": mission.missionType,
                     "format": mission.deliverableFormat ?? "text",

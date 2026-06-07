@@ -46,6 +46,11 @@ struct GameContainerView: View {
         .onChange(of: appState.missions) { syncMissionStates() }
         .onChange(of: appState.lootToPresent?.id) { _, newId in
             if let id = newId, let mission = appState.lootToPresent, mission.id == id {
+                // #region agent log
+                let dLen = mission.deliverable?.count ?? -1
+                let dPreview = mission.deliverable.map { String($0.prefix(80)) } ?? "NIL"
+                print("[DEBUG-H2] GameContainerView.onChange(lootToPresent): capturing mission \(id). deliverable len=\(dLen) preview='\(dPreview)'")
+                // #endregion
                 lootMission = mission
                 appState.lootToPresent = nil
             }

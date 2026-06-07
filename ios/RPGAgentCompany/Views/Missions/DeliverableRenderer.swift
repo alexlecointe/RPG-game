@@ -53,6 +53,13 @@ struct DeliverableContentBlock: View {
     @State private var showPreview = true
 
     var body: some View {
+        // #region agent log
+        let _ = {
+            let dLen = mission.deliverable?.count ?? -1
+            let dPreview = mission.deliverable.map { String($0.prefix(80)) } ?? "NIL"
+            print("[DEBUG-H4] DeliverableContentBlock.body: deliverable len=\(dLen) preview='\(dPreview)'")
+        }()
+        // #endregion
         VStack(alignment: .leading, spacing: 10) {
             if let content = mission.deliverable {
                 let summary = DeliverableHelper.executiveSummary(from: content)

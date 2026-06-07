@@ -118,6 +118,8 @@ class MissionService:
         deliverable_format: str,
         deliverable: str,
     ) -> Mission:
+        import structlog as _slog
+        _slog.get_logger().info("debug_complete_mission", mission_id=mission.id, deliverable_len=len(deliverable) if deliverable else -1, deliverable_preview=(deliverable or "")[:120], deliverable_format=deliverable_format)
         mission.status = MissionStatus.COMPLETED
         mission.deliverable_format = deliverable_format
         mission.deliverable = deliverable

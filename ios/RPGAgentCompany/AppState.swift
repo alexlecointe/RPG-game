@@ -294,13 +294,19 @@ final class AppState: ObservableObject {
     }
 
     private func pollUntilComplete(missionId: String) async {
-        for _ in 0..<60 {
+        // Poll up to 120s (240 × 0.5s) — LLM missions can take 30-90s
+        for _ in 0..<240 {
             try? await Task.sleep(nanoseconds: 500_000_000)
             if let updated = try? await api.fetchMission(id: missionId) {
                 if let idx = missions.firstIndex(where: { $0.id == missionId }) {
                     missions[idx] = updated
                 }
                 if updated.status == "completed" {
+                    // #region agent log
+                    let delivLen = updated.deliverable?.count ?? -1
+                    let delivPreview = updated.deliverable?.prefix(80) ?? "NIL"
+                    print("[DEBUG-H1] pollUntilComplete: mission completed. deliverable len=\(delivLen) preview='\(delivPreview)'")
+                    // #endregion
                     justCompletedAgentTypes.insert(updated.agentType)
                     pendingMissionCompletions.append((updated.agentType, updated.missionType))
                     lootToPresent = updated
@@ -318,6 +324,29 @@ final class AppState: ObservableObject {
                 if updated.status == "failed" {
                     return
                 }
+            }
+        }
+        // Polling timed out — do a final refresh so NPC dialogue reflects reality
+        // #region agent log
+        print("[DEBUG-H3] pollUntilComplete: TIMEOUT after 120s — doing final refresh")
+        // #endregion
+        if let companyId = company?.id {
+            missions = (try? await api.fetchMissions(companyId: companyId)) ?? missions
+            questChain = (try? await api.fetchQuestChain(companyId: companyId)) ?? questChain
+            // Present loot if the mission completed during the timeout gap
+            if let finalMission = missions.first(where: { $0.id == missionId }),
+               finalMission.status == "completed",
+               finalMission.deliverable != nil {
+                // #region agent log
+                let fLen = finalMission.deliverable?.count ?? -1
+                print("[DEBUG-H3] pollUntilComplete: timeout fallback found completed mission. deliverable len=\(fLen)")
+                // #endregion
+                justCompletedAgentTypes.insert(finalMission.agentType)
+                lootToPresent = finalMission
+            } else if let finalMission = missions.first(where: { $0.id == missionId }) {
+                // #region agent log
+                print("[DEBUG-H3] pollUntilComplete: timeout fallback — mission status=\(finalMission.status) deliverable=\(finalMission.deliverable == nil ? "NIL" : "'\(String(finalMission.deliverable!.prefix(40)))')")
+                // #endregion
             }
         }
     }
