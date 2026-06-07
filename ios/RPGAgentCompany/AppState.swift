@@ -294,12 +294,18 @@ final class AppState: ObservableObject {
     }
 
     private func pollUntilComplete(missionId: String) async {
+        // If mission stays pending for 30s, the runner likely died — call startQuestStep again
+        // to trigger the stuck-mission re-fire logic on the backend.
+        var pendingTickCount = 0
         // Poll up to 120s (240 × 0.5s) — LLM missions can take 30-90s
         for _ in 0..<240 {
             try? await Task.sleep(nanoseconds: 500_000_000)
             if let updated = try? await api.fetchMission(id: missionId) {
                 if let idx = missions.firstIndex(where: { $0.id == missionId }) {
                     missions[idx] = updated
+                }
+                if updated.status == "pending" {
+                    pendingTickCount += 1
                 }
                 if updated.status == "completed" {
                     // #region agent log

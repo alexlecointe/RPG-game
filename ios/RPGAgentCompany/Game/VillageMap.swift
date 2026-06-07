@@ -397,25 +397,7 @@ enum VillageMap {
             return pages
         }
 
-        if hasCompletedMission {
-            let nextStep = questChain.first { $0.isAvailable && $0.agentType != agentType }
-            if let next = nextStep {
-                let nextBuilding = buildingDisplayName(for: next.agentType)
-                let nextNPC = npcName(for: next.agentType)
-                return [
-                    DialoguePage(text: "Tu as deja recupere ton livrable. Bien joue !", choices: nil),
-                    DialoguePage(
-                        text: "Prochaine etape : va voir \(nextNPC) a \(nextBuilding) pour \"\(next.title)\".",
-                        choices: [("COMPRIS", .close)]
-                    ),
-                ]
-            } else {
-                return [
-                    DialoguePage(text: "Bien joue, ta mission ici est terminee !", choices: [("COMPRIS", .close)]),
-                ]
-            }
-        }
-
+        // Priority: running/available steps take precedence over "completed" state
         if hasRunningMission || (myStep?.isRunning == true) {
             return [
                 DialoguePage(text: "Patience... je travaille sur ta mission.", choices: nil),
@@ -461,6 +443,26 @@ enum VillageMap {
                 ]))
             }
             return pages
+        }
+
+        // Show "completed" only when no available/running/locked steps remain for this agent
+        if hasCompletedMission && myStep == nil {
+            let nextStep = questChain.first { $0.isAvailable && $0.agentType != agentType }
+            if let next = nextStep {
+                let nextBuilding = buildingDisplayName(for: next.agentType)
+                let nextNPC = npcName(for: next.agentType)
+                return [
+                    DialoguePage(text: "Bien joue, toutes mes etapes sont terminees !", choices: nil),
+                    DialoguePage(
+                        text: "Prochaine etape : va voir \(nextNPC) a \(nextBuilding) pour \"\(next.title)\".",
+                        choices: [("COMPRIS", .close)]
+                    ),
+                ]
+            } else {
+                return [
+                    DialoguePage(text: "Bien joue, ta mission ici est terminee !", choices: [("COMPRIS", .close)]),
+                ]
+            }
         }
 
         if !myCompletedSteps.isEmpty && myStep == nil {

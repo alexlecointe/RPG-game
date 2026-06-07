@@ -49,6 +49,9 @@ async def get_quest_chain(company_id: str, db: DbSession):
     response_model=MissionOut,
 )
 async def start_quest_step(company_id: str, step_number: int, db: DbSession):
+    from app.workers.runner import schedule_mission_run
+    from sqlalchemy import select
+
     chain_svc = QuestChainService(db)
     step = await chain_svc.get_step(company_id, step_number)
 
@@ -56,12 +59,26 @@ async def start_quest_step(company_id: str, step_number: int, db: DbSession):
         raise HTTPException(404, "Step not found")
     if step.status == QuestStepStatus.COMPLETED:
         raise HTTPException(400, "Step already completed")
-    if step.status == QuestStepStatus.RUNNING:
-        raise HTTPException(400, "Step already running")
     if step.status == QuestStepStatus.LOCKED:
         raise HTTPException(400, "Step is locked — complete prerequisites first")
 
     mission_svc = MissionService(db)
+
+    # If step is already RUNNING, check if the mission runner is alive.
+    # If mission is stuck in pending/running for > 3min, re-schedule the runner.
+    if step.status == QuestStepStatus.RUNNING and step.mission_id:
+        existing = await mission_svc.get_mission(step.mission_id)
+        if existing and existing.status in (MissionStatus.PENDING, MissionStatus.RUNNING):
+            from datetime import datetime, timezone, timedelta
+            stuck_threshold = datetime.now(timezone.utc) - timedelta(minutes=3)
+            ref_time = existing.started_at or existing.created_at
+            if ref_time and ref_time.replace(tzinfo=timezone.utc) < stuck_threshold:
+                # Mission is stuck — refire the runner
+                schedule_mission_run(existing.id)
+            return existing
+        if existing and existing.status == MissionStatus.COMPLETED:
+            raise HTTPException(400, "Step already completed")
+
     try:
         mission = await mission_svc.start_mission(company_id, step.mission_type)
     except ValueError as e:
