@@ -252,11 +252,23 @@ final class AppState: ObservableObject {
     }
 
     func questStepForBuilding(agentType: String) -> QuestStep? {
-        questChain.first { $0.agentType == agentType && ($0.isAvailable || $0.isRunning) }
+        let types = Set(VillageMap.polisiaAgentTypes(for: agentType))
+        return questChain.first { types.contains($0.agentType) && ($0.isAvailable || $0.isRunning) }
     }
 
     func lockedQuestSteps(agentType: String) -> [QuestStep] {
-        questChain.filter { $0.agentType == agentType && $0.isLocked }
+        let types = Set(VillageMap.polisiaAgentTypes(for: agentType))
+        return questChain.filter { types.contains($0.agentType) && $0.isLocked }
+    }
+
+    func completedQuestSteps(agentType: String) -> [QuestStep] {
+        let types = Set(VillageMap.polisiaAgentTypes(for: agentType))
+        return questChain.filter { types.contains($0.agentType) && $0.isCompleted }
+    }
+
+    func allQuestStepsForBuilding(agentType: String) -> [QuestStep] {
+        let types = Set(VillageMap.polisiaAgentTypes(for: agentType))
+        return questChain.filter { types.contains($0.agentType) }
     }
 
     func prerequisiteNames(for step: QuestStep) -> [String] {

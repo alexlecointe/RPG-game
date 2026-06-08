@@ -38,6 +38,10 @@ celery_app.conf.update(
             "task": "app.workers.celery_app.check_recurring_missions",
             "schedule": 3600.0,  # every hour
         },
+        "monitor-ads-campaigns": {
+            "task": "app.workers.celery_app.monitor_ads_campaigns",
+            "schedule": 14400.0,  # every 4 hours
+        },
     },
 )
 
@@ -146,3 +150,36 @@ def _compute_next_run(rm, now) -> "datetime":
     elif rm.frequency == "monthly":
         return now + timedelta(days=28)
     return now + timedelta(days=1)
+
+
+@celery_app.task(name="app.workers.celery_app.monitor_ads_campaigns")
+def monitor_ads_campaigns() -> dict:
+    """Monitor Meta Ads performance for all companies with active campaigns."""
+    return _run_async(_monitor_ads_async())
+
+
+async def _monitor_ads_async() -> dict:
+    import structlog
+    from sqlalchemy import select
+
+    from app.core.database import SessionLocal
+    from app.models.entities import AdCampaign, Company
+    from app.services.ads import monitor_campaigns
+
+    logger = structlog.get_logger()
+    monitored = 0
+
+    async with SessionLocal() as db:
+        result = await db.execute(
+            select(Company.id).join(AdCampaign).distinct()
+        )
+        company_ids = [row[0] for row in result.all()]
+
+        for cid in company_ids:
+            try:
+                await monitor_campaigns(db, cid)
+                monitored += 1
+            except Exception as exc:
+                logger.warning("ads_monitor_company_failed", company_id=cid, error=str(exc))
+
+    return {"monitored": monitored}

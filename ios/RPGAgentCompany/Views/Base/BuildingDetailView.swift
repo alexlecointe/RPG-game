@@ -14,6 +14,7 @@ struct BuildingDetailView: View {
                 ScrollView {
                     VStack(spacing: 16) {
                         buildingHeader
+                        polisiaProductPanel
                         questList
                     }
                     .padding(16)
@@ -71,8 +72,21 @@ struct BuildingDetailView: View {
         .pixelCard()
     }
 
+    @ViewBuilder
+    private var polisiaProductPanel: some View {
+        if building.agentType == "builder", let url = appState.company?.siteUrl, !url.isEmpty {
+            WebsiteLivePanel(siteUrl: url)
+        } else if building.agentType == "finance" {
+            SetupPaymentsPanel()
+                .environmentObject(appState)
+        } else if building.agentType == "marketer" {
+            AdsBudgetPanel()
+                .environmentObject(appState)
+        }
+    }
+
     private var questList: some View {
-        let completedSteps = appState.questChain.filter { $0.agentType == building.agentType && $0.isCompleted }
+        let completedSteps = appState.completedQuestSteps(agentType: building.agentType)
         let lockedSteps = appState.lockedQuestSteps(agentType: building.agentType)
 
         return VStack(spacing: 10) {
@@ -100,7 +114,7 @@ struct BuildingDetailView: View {
                 }
             }
 
-            let allSteps = appState.questChain.filter { $0.agentType == building.agentType }
+            let allSteps = appState.allQuestStepsForBuilding(agentType: building.agentType)
             if allSteps.isEmpty {
                 Text("Aucune quête assignée à ce bâtiment.")
                     .font(PixelTheme.captionFont)
@@ -293,15 +307,181 @@ struct BuildingDetailView: View {
 
     private var agentDescription: String {
         switch building.agentType {
-        case "builder": return "Code des landings, sites et briefs produit."
-        case "marketer": return "Ecrit des pubs, posts et campagnes ads."
-        case "researcher": return "Analyse le marche et genere des insights."
-        case "orchestrator": return "Coordonne les agents et definit la strategie."
-        case "outreach": return "Gere la prospection et les cold emails."
-        case "support": return "Repond aux clients et gere le support."
-        case "finance": return "Suit les revenus, depenses et budget."
-        case "content": return "Cree articles, visuels et documents."
+        case "orchestrator": return "Recherche marche, docs et strategie business."
+        case "builder": return "Genere et heberge ton site web live."
+        case "marketer": return "Videos ads et campagnes Meta."
+        case "finance": return "Stripe Connect et payouts."
         default: return "Un batiment du village."
+        }
+    }
+}
+
+// MARK: - Polsia product panels
+
+struct WebsiteLivePanel: View {
+    let siteUrl: String
+    @State private var copied = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("SITE LIVE")
+                .font(PixelTheme.captionFont)
+                .foregroundStyle(PixelTheme.accentGreen)
+            Text(siteUrl)
+                .font(PixelTheme.microFont)
+                .foregroundStyle(PixelTheme.textSecondary)
+                .lineLimit(2)
+            HStack(spacing: 10) {
+                if let url = URL(string: siteUrl) {
+                    Link(destination: url) {
+                        Text("OUVRIR")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(PixelButtonStyle(color: PixelTheme.accentGreen))
+                }
+                Button(action: {
+                    UIPasteboard.general.string = siteUrl
+                    copied = true
+                }) {
+                    Text(copied ? "COPIE !" : "COPIER")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PixelButtonStyle(color: PixelTheme.bgLight))
+            }
+        }
+        .pixelCard(highlighted: true)
+    }
+}
+
+struct SetupPaymentsPanel: View {
+    @EnvironmentObject private var appState: AppState
+    @State private var isLoading = false
+    @State private var error: String?
+
+    private var statusLabel: String {
+        switch appState.company?.stripeConnectStatus ?? "not_started" {
+        case "ready": return "Connecte"
+        case "pending": return "En attente"
+        default: return "Non configure"
+        }
+    }
+
+    private var statusColor: Color {
+        switch appState.company?.stripeConnectStatus ?? "not_started" {
+        case "ready": return PixelTheme.accentGreen
+        case "pending": return PixelTheme.accent
+        default: return PixelTheme.textSecondary
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("PAIEMENTS")
+                    .font(PixelTheme.captionFont)
+                    .foregroundStyle(PixelTheme.textSecondary)
+                Spacer()
+                Text(statusLabel.uppercased())
+                    .font(PixelTheme.microFont)
+                    .foregroundStyle(statusColor)
+            }
+            if let error {
+                Text(error)
+                    .font(PixelTheme.microFont)
+                    .foregroundStyle(PixelTheme.accentRed)
+            }
+            if appState.company?.stripeConnectStatus != "ready" {
+                Button(action: { Task { await setupPayments() } }) {
+                    HStack {
+                        if isLoading { ProgressView().scaleEffect(0.7) }
+                        Text(isLoading ? "CHARGEMENT..." : "SETUP PAYMENTS")
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PixelButtonStyle(color: PixelTheme.accent))
+                .disabled(isLoading)
+            }
+        }
+        .pixelCard(highlighted: true)
+    }
+
+    private func setupPayments() async {
+        guard let companyId = appState.company?.id else { return }
+        isLoading = true
+        error = nil
+        defer { isLoading = false }
+        do {
+            let urlString = try await APIClient.shared.startStripeOnboarding(companyId: companyId)
+            guard let url = URL(string: urlString), !urlString.isEmpty else {
+                error = "Lien onboarding indisponible"
+                return
+            }
+            await UIApplication.shared.open(url)
+            await appState.refreshCompany()
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+}
+
+struct AdsBudgetPanel: View {
+    @EnvironmentObject private var appState: AppState
+    @State private var budgetEuros: Double = 10
+    @State private var isSaving = false
+    @State private var message: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("BUDGET ADS")
+                .font(PixelTheme.captionFont)
+                .foregroundStyle(PixelTheme.textSecondary)
+            if let daily = appState.company?.dailyAdsBudgetCents, daily > 0 {
+                Text("Budget : \(daily / 100) EUR/jour")
+                    .font(PixelTheme.bodyFont)
+                    .foregroundStyle(PixelTheme.textPrimary)
+            }
+            if let balance = appState.company?.adsWalletBalanceCents {
+                Text("Wallet : \(balance / 100) EUR")
+                    .font(PixelTheme.captionFont)
+                    .foregroundStyle(PixelTheme.textSecondary)
+            }
+            HStack {
+                Slider(value: $budgetEuros, in: 5...100, step: 5)
+                Text("\(Int(budgetEuros))€")
+                    .font(PixelTheme.captionFont)
+                    .foregroundStyle(PixelTheme.accent)
+                    .frame(width: 36)
+            }
+            Button(action: { Task { await saveBudget() } }) {
+                Text(isSaving ? "..." : "DEFINIR BUDGET")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(PixelButtonStyle(color: PixelTheme.accentPurple))
+            .disabled(isSaving)
+            if let message {
+                Text(message)
+                    .font(PixelTheme.microFont)
+                    .foregroundStyle(PixelTheme.accentGreen)
+            }
+        }
+        .pixelCard()
+        .onAppear {
+            if let daily = appState.company?.dailyAdsBudgetCents, daily > 0 {
+                budgetEuros = Double(daily / 100)
+            }
+        }
+    }
+
+    private func saveBudget() async {
+        guard let companyId = appState.company?.id else { return }
+        isSaving = true
+        defer { isSaving = false }
+        do {
+            try await APIClient.shared.setAdsBudget(companyId: companyId, dailyBudgetCents: Int(budgetEuros) * 100)
+            await appState.refreshCompany()
+            message = "Budget enregistre"
+        } catch {
+            message = error.localizedDescription
         }
     }
 }

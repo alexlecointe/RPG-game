@@ -254,12 +254,59 @@ async def _run_mission_inner(mission_id: str) -> None:
                         f"Tokens: {total:,} (${cost:.4f})",
                     )
 
+            deliverable_content = agent_result.content
+            deliverable_format = agent_result.format
+
+            if mission.mission_type == "landing_page" and agent_result.content:
+                from app.services.site_deploy import build_site_url, deploy_landing_html
+
+                deploy_result = await deploy_landing_html(
+                    company.slug or company.name,
+                    agent_result.content,
+                    company.slug or "site",
+                    company.render_service_id,
+                )
+                site_url = deploy_result.get("site_url") or build_site_url(
+                    company.slug or "", company.render_url
+                )
+                if site_url:
+                    deliverable_content = (
+                        f"{agent_result.content}\n\n---\n\n"
+                        f"**Site live :** {site_url}\n"
+                    )
+                    if log_step:
+                        await log_step("site_deployed", f"Site deploye : {site_url}")
+
+            if mission.mission_type == "ads_launch_plan":
+                from sqlalchemy import select as sa_select
+
+                from app.models.entities import CompanyAsset
+                from app.services.ads import launch_meta_campaign
+
+                assets_result = await db.execute(
+                    sa_select(CompanyAsset).where(
+                        CompanyAsset.company_id == company.id,
+                        CompanyAsset.asset_type == "video",
+                    ).limit(3)
+                )
+                videos = [a.public_url for a in assets_result.scalars().all() if a.public_url]
+                if videos and company.daily_ads_budget_cents > 0:
+                    try:
+                        await launch_meta_campaign(
+                            db, company, f"{company.name} Ads",
+                            company.daily_ads_budget_cents, videos, [], [],
+                        )
+                        if log_step:
+                            await log_step("ads_launched", f"Campagne Meta lancee ({len(videos)} videos)")
+                    except Exception as ads_exc:
+                        logger.warning("ads_launch_failed", error=str(ads_exc))
+
             svc = MissionService(db)
             await db.refresh(mission)
             mission = await svc.get_mission(mission_id) or mission
             mission.quality_score = best_score
             mission.quality_feedback = feedback
-            await svc.complete_mission(mission, agent_result.format, agent_result.content)
+            await svc.complete_mission(mission, deliverable_format, deliverable_content)
 
             if best_score < QUALITY_THRESHOLD:
                 from app.services.orchestrator import OrchestratorService as _Orch

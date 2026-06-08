@@ -4,7 +4,7 @@ from sqlalchemy import select
 from app.api.deps import DbSession, verify_api_key
 from app.agents.mission_catalog import MISSION_CATALOG
 from app.core.config import get_settings
-from app.models.entities import BetaFeedback, Mission, MissionLog, MissionStatus
+from app.models.entities import BetaFeedback, Mission, MissionLog, MissionStatus, QuestStepStatus
 from app.schemas.api import BetaFeedbackCreate, BetaFeedbackOut, CompanyCreate, CompanyOut, WalletOut
 from app.services.company import CompanyService
 from app.services.quest_chain import QuestChainService
@@ -13,14 +13,27 @@ from app.workers.runner import schedule_mission_run
 
 router = APIRouter(dependencies=[Depends(verify_api_key)])
 
-AUTO_MISSIONS: list[str] = []
+AUTO_MISSIONS: list[str] = ["market_scan"]
 
 
-def _company_out(company, wallet) -> CompanyOut:
+async def _company_out(company, wallet) -> CompanyOut:
+    from app.services.site_deploy import build_site_url
+    from app.services.stripe_connect import fetch_connect_status, get_stripe_status
+
     settings = get_settings()
+    site_url = build_site_url(company.slug or "", company.render_url)
+    stripe_status = get_stripe_status(company)
+    if company.stripe_connect_account_id:
+        try:
+            data = await fetch_connect_status(company.stripe_connect_account_id)
+            stripe_status = data.get("status", stripe_status)
+        except Exception:
+            pass
+
     return CompanyOut(
         id=company.id,
         name=company.name,
+        slug=company.slug,
         mission_statement=company.mission_statement,
         product_description=company.product_description,
         target_audience=company.target_audience,
@@ -28,6 +41,11 @@ def _company_out(company, wallet) -> CompanyOut:
         level=company.level,
         xp=company.xp,
         buildings=company.buildings,
+        render_url=company.render_url,
+        site_url=site_url,
+        stripe_connect_status=stripe_status,
+        daily_ads_budget_cents=company.daily_ads_budget_cents or 0,
+        ads_wallet_balance_cents=company.ads_wallet_balance_cents or 0,
         wallet=WalletOut(
             credits_balance=wallet.credits_balance,
             credits_cap=settings.credits_cap,
@@ -53,10 +71,15 @@ async def create_company(user_id: str, body: CompanyCreate, db: DbSession):
 
     await _launch_auto_missions(db, company)
 
-    return _company_out(company, company.wallet)
+    return await _company_out(company, company.wallet)
 
 
 async def _launch_auto_missions(db, company):
+    from app.services.quest_chain import QuestChainService
+
+    chain_svc = QuestChainService(db)
+    step1 = await chain_svc.get_step(company.id, 1)
+
     for mission_type in AUTO_MISSIONS:
         catalog = MISSION_CATALOG.get(mission_type)
         if not catalog:
@@ -77,6 +100,8 @@ async def _launch_auto_missions(db, company):
             step="auto_created",
             message=f"Mission {mission_type} lancee automatiquement",
         ))
+        if step1 and step1.mission_type == mission_type and step1.status == QuestStepStatus.AVAILABLE:
+            await chain_svc.mark_step_running(company.id, 1, mission.id)
     await db.commit()
 
     result = await db.execute(
@@ -99,7 +124,7 @@ async def get_company(company_id: str, db: DbSession):
     wallet_svc = WalletService(db)
     await wallet_svc.apply_daily_regen(company.wallet)
     await db.commit()
-    return _company_out(company, company.wallet)
+    return await _company_out(company, company.wallet)
 
 
 @router.post(

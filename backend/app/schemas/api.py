@@ -48,6 +48,7 @@ class WalletOut(BaseModel):
 class CompanyOut(BaseModel):
     id: str
     name: str
+    slug: Optional[str] = None
     mission_statement: str
     product_description: str
     target_audience: str
@@ -55,6 +56,11 @@ class CompanyOut(BaseModel):
     level: int
     xp: int
     buildings: list[BuildingOut]
+    render_url: Optional[str] = None
+    site_url: Optional[str] = None
+    stripe_connect_status: str = "not_started"  # not_started | pending | ready
+    daily_ads_budget_cents: int = 0
+    ads_wallet_balance_cents: int = 0
     wallet: WalletOut
 
     model_config = {"from_attributes": True}
@@ -305,5 +311,47 @@ class QuestStepOut(BaseModel):
     building_name: str = ""
     unlocked_at: Optional[datetime]
     completed_at: Optional[datetime]
+
+    model_config = {"from_attributes": True}
+
+
+class StripeStatusOut(BaseModel):
+    status: str
+    charges_enabled: bool = False
+    payouts_enabled: bool = False
+
+
+class StripeOnboardingOut(BaseModel):
+    url: str
+
+
+class AdCampaignOut(BaseModel):
+    id: str
+    company_id: str
+    name: str
+    status: str
+    daily_budget_cents: int
+    spend_cents: int
+    impressions: int
+    clicks: int
+    ctr: float
+    cpc_cents: int
+    meta_campaign_id: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class AdCreativeOut(BaseModel):
+    id: str
+    campaign_id: str
+    title: str
+    body: str
+    video_url: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    status: str
+    spend_cents: int
+    impressions: int
+    clicks: int
+    ctr: float
 
     model_config = {"from_attributes": True}

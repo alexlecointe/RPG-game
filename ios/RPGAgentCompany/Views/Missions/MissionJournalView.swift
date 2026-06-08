@@ -374,6 +374,48 @@ struct MissionJournalView: View {
                 }
                 .pixelCard()
 
+                if appState.company?.siteUrl != nil || appState.company?.stripeConnectStatus != nil {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("— BUSINESS LIVE —")
+                            .font(PixelTheme.captionFont)
+                            .foregroundStyle(PixelTheme.textSecondary)
+                        if let url = appState.company?.siteUrl, !url.isEmpty {
+                            HStack {
+                                Text("Site")
+                                    .font(PixelTheme.microFont)
+                                    .foregroundStyle(PixelTheme.textSecondary)
+                                Spacer()
+                                if let link = URL(string: url) {
+                                    Link("Ouvrir", destination: link)
+                                        .font(PixelTheme.microFont)
+                                        .foregroundStyle(PixelTheme.accentGreen)
+                                }
+                            }
+                        }
+                        HStack {
+                            Text("Paiements")
+                                .font(PixelTheme.microFont)
+                                .foregroundStyle(PixelTheme.textSecondary)
+                            Spacer()
+                            Text((appState.company?.stripeConnectStatus ?? "not_started").uppercased())
+                                .font(PixelTheme.microFont)
+                                .foregroundStyle(PixelTheme.accent)
+                        }
+                        if let budget = appState.company?.dailyAdsBudgetCents, budget > 0 {
+                            HStack {
+                                Text("Budget ads")
+                                    .font(PixelTheme.microFont)
+                                    .foregroundStyle(PixelTheme.textSecondary)
+                                Spacer()
+                                Text("\(budget / 100) EUR/j")
+                                    .font(PixelTheme.microFont)
+                                    .foregroundStyle(PixelTheme.accentPurple)
+                            }
+                        }
+                    }
+                    .pixelCard()
+                }
+
                 VStack(spacing: 10) {
                     Text("— MISSIONS —")
                         .font(PixelTheme.captionFont)

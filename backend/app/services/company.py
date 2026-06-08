@@ -14,14 +14,30 @@ from app.schemas.api import CompanyCreate
 
 logger = structlog.get_logger()
 
+# Polsia-like: 4 functional buildings — HQ, Website, Ads, Payments
+POLSIA_BUILDINGS: list[AgentType] = [
+    AgentType.ORCHESTRATOR,  # HQ — research, docs, strategy
+    AgentType.BUILDER,       # Website — landing, product
+    AgentType.MARKETER,      # Ads — Meta campaigns
+    AgentType.FINANCE,       # Payments — Stripe Connect
+]
+
 BUILDINGS_BY_BUSINESS_TYPE: dict[BusinessType, list[AgentType]] = {
-    BusinessType.ECOMMERCE: list(AgentType),
-    BusinessType.APP: [
-        AgentType.BUILDER, AgentType.MARKETER, AgentType.RESEARCHER,
-        AgentType.ORCHESTRATOR, AgentType.OUTREACH, AgentType.SUPPORT,
-        AgentType.CONTENT,
-    ],
-    BusinessType.SAAS: list(AgentType),
+    BusinessType.ECOMMERCE: POLSIA_BUILDINGS,
+    BusinessType.APP: POLSIA_BUILDINGS,
+    BusinessType.SAAS: POLSIA_BUILDINGS,
+}
+
+# Map legacy agent types to Polsia building for UI/NPC routing
+AGENT_TO_POLSIA_BUILDING: dict[AgentType, AgentType] = {
+    AgentType.RESEARCHER: AgentType.ORCHESTRATOR,
+    AgentType.CONTENT: AgentType.ORCHESTRATOR,
+    AgentType.SUPPORT: AgentType.ORCHESTRATOR,
+    AgentType.OUTREACH: AgentType.ORCHESTRATOR,
+    AgentType.BUILDER: AgentType.BUILDER,
+    AgentType.MARKETER: AgentType.MARKETER,
+    AgentType.FINANCE: AgentType.FINANCE,
+    AgentType.ORCHESTRATOR: AgentType.ORCHESTRATOR,
 }
 
 

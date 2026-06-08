@@ -74,16 +74,34 @@ async def inbound_email(request: Request, db: AsyncSession = Depends(get_db)):
 
 @router.post("/webhooks/stripe")
 async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
-    """Receive Stripe webhook events (forwarded from company Render services).
-
-    Logs the payment event against the company for agent visibility
-    in the activity feed. The actual order storage happens on the
-    company's own Render service (Neon DB).
-    """
+    """Receive Stripe webhook events (payments + Connect account updates)."""
     body = await request.json()
 
     event_type = body.get("type", "")
     data_obj = body.get("data", {}).get("object", {})
+
+    if event_type == "account.updated":
+        account_id = data_obj.get("id", "")
+        if account_id:
+            result = await db.execute(
+                select(Company).where(Company.stripe_connect_account_id == account_id)
+            )
+            company = result.scalar_one_or_none()
+            if company:
+                charges = data_obj.get("charges_enabled", False)
+                payouts = data_obj.get("payouts_enabled", False)
+                status_label = "ready" if charges and payouts else "pending"
+                notif = CompanyNotification(
+                    company_id=company.id,
+                    type=NotificationType.SYSTEM,
+                    title="Stripe Connect mis a jour",
+                    message=f"Statut paiements : {status_label}",
+                )
+                db.add(notif)
+                await db.commit()
+                logger.info("stripe_account_updated", company_id=company.id, status=status_label)
+        return {"received": True, "processed": True}
+
     metadata = data_obj.get("metadata", {}) or {}
     company_slug = metadata.get("company_slug", "")
 

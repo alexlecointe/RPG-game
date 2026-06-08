@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from app.api.v1 import admin, buildings, catalog, companies, daily_reward, health, missions, notifications, quest_chain, sage, shop, token_usage, users, webhooks
+from app.api.v1 import admin, ads, buildings, catalog, companies, daily_reward, health, missions, notifications, quest_chain, sage, shop, stripe_connect, token_usage, users, webhooks
 
 api_router = APIRouter()
 api_router.include_router(health.router, tags=["health"])
@@ -17,3 +17,5 @@ api_router.include_router(webhooks.router, tags=["webhooks"])
 api_router.include_router(token_usage.router, tags=["token-usage"])
 api_router.include_router(admin.router, tags=["admin"])
 api_router.include_router(shop.router, tags=["shop"])
+api_router.include_router(stripe_connect.router, tags=["stripe"])
+api_router.include_router(ads.router, tags=["ads"])

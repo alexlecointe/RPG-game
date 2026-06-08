@@ -223,43 +223,43 @@ enum VillageMap {
 
     // MARK: - Buildings
 
+    /// Polsia-like hub — 4 batiments fonctionnels
     static let buildings: [BuildingDef] = [
-        // === LEFT CLUSTER (2 large buildings) ===
         BuildingDef(id: "hq", agentType: "orchestrator", name: "QG",
                     asset: "bld_type_mansion",
-                    tileX: 4, tileY: 18, pixelW: 112, pixelH: 96,
-                    doorTileX: 6, doorTileY: 20),
-        BuildingDef(id: "market", agentType: "marketer", name: "AGENCE",
-                    asset: "bld_type_gym",
-                    tileX: 11, tileY: 18, pixelW: 96, pixelH: 88,
-                    doorTileX: 12, doorTileY: 20),
-        // === CENTER (1 prominent building) ===
-        BuildingDef(id: "lab", agentType: "researcher", name: "OBSERVATOIRE",
-                    asset: "bld_type_oaks_lab",
-                    tileX: 22, tileY: 18, pixelW: 112, pixelH: 72,
-                    doorTileX: 24, doorTileY: 20),
-        // === RIGHT CLUSTER (5 smaller buildings / houses) ===
-        BuildingDef(id: "forge", agentType: "builder", name: "FORGE",
+                    tileX: 8, tileY: 18, pixelW: 112, pixelH: 96,
+                    doorTileX: 10, doorTileY: 20),
+        BuildingDef(id: "forge", agentType: "builder", name: "SITE WEB",
                     asset: "bld_type_pokemart",
-                    tileX: 33, tileY: 19, pixelW: 64, pixelH: 64,
-                    doorTileX: 34, doorTileY: 20),
-        BuildingDef(id: "post_office", agentType: "outreach", name: "POSTE",
-                    asset: "bld_type_house_1",
-                    tileX: 37, tileY: 18, pixelW: 80, pixelH: 72,
+                    tileX: 22, tileY: 18, pixelW: 96, pixelH: 72,
+                    doorTileX: 24, doorTileY: 20),
+        BuildingDef(id: "market", agentType: "marketer", name: "ADS",
+                    asset: "bld_type_gym",
+                    tileX: 36, tileY: 18, pixelW: 96, pixelH: 88,
                     doorTileX: 38, doorTileY: 20),
-        BuildingDef(id: "inn", agentType: "support", name: "AUBERGE",
-                    asset: "bld_type_house_3",
-                    tileX: 42, tileY: 19, pixelW: 80, pixelH: 56,
-                    doorTileX: 43, doorTileY: 20),
-        BuildingDef(id: "bank", agentType: "finance", name: "BANQUE",
+        BuildingDef(id: "bank", agentType: "finance", name: "PAIEMENTS",
                     asset: "bld_type_house_5",
-                    tileX: 47, tileY: 19, pixelW: 64, pixelH: 56,
-                    doorTileX: 48, doorTileY: 20),
-        BuildingDef(id: "workshop", agentType: "content", name: "ATELIER",
-                    asset: "bld_type_house_2",
-                    tileX: 51, tileY: 19, pixelW: 96, pixelH: 56,
+                    tileX: 50, tileY: 19, pixelW: 80, pixelH: 64,
                     doorTileX: 52, doorTileY: 20),
     ]
+
+    /// Agent types regroupes par batiment Polsia
+    static func polisiaAgentTypes(for buildingAgent: String) -> [String] {
+        switch buildingAgent {
+        case "orchestrator": return ["orchestrator", "researcher", "content", "support", "outreach"]
+        case "builder": return ["builder"]
+        case "marketer": return ["marketer"]
+        case "finance": return ["finance"]
+        default: return [buildingAgent]
+        }
+    }
+
+    static func polisiaBuildingAgent(for stepAgentType: String) -> String {
+        switch stepAgentType {
+        case "researcher", "content", "support", "outreach": return "orchestrator"
+        default: return stepAgentType
+        }
+    }
 
     // MARK: - Trees (placed as 64×96 sprites = 2×3 tiles)
 
@@ -322,33 +322,21 @@ enum VillageMap {
     // MARK: - NPCs
 
     static let npcs: [NPCDef] = [
-        NPCDef(id: "npc_orchestrator", name: "Maire", tileX: 6, tileY: 21,
-               dialogue: "Bienvenue au QG ! Je coordonne tous les agents et definis la strategie.",
+        NPCDef(id: "npc_orchestrator", name: "Maire", tileX: 10, tileY: 21,
+               dialogue: "Bienvenue au QG ! Recherche marche, docs et strategie business.",
                agentType: "orchestrator", patrolRadius: 0),
-        NPCDef(id: "npc_marketer", name: "Agent", tileX: 12, tileY: 21,
-               dialogue: "Salut ! A l'Agence, on ecrit tes pubs, analyse la concurrence et planifie tes campagnes ads.",
-               agentType: "marketer", patrolRadius: 0),
-        NPCDef(id: "npc_researcher", name: "Observateur", tileX: 24, tileY: 21,
-               dialogue: "L'Observatoire analyse les donnees du marche. Confie-moi une mission de recherche !",
-               agentType: "researcher", patrolRadius: 0),
-        NPCDef(id: "npc_guide", name: "Le Sage", tileX: 30, tileY: 22,
-               dialogue: "Bienvenue, fondateur ! Explore le village. Chaque batiment abrite un agent specialise.",
-               agentType: nil, patrolRadius: 0),
-        NPCDef(id: "npc_builder", name: "Forgeron", tileX: 34, tileY: 21,
-               dialogue: "Bienvenue a la Forge ! Je code des landings, des sites et des briefs produit.",
+        NPCDef(id: "npc_builder", name: "Webmaster", tileX: 24, tileY: 21,
+               dialogue: "Ici on genere et heberge ton site web live.",
                agentType: "builder", patrolRadius: 0),
-        NPCDef(id: "npc_outreach", name: "Messager", tileX: 38, tileY: 21,
-               dialogue: "Au Bureau de Poste, je gere la prospection et les emails de ta boite.",
-               agentType: "outreach", patrolRadius: 0),
-        NPCDef(id: "npc_support", name: "Aubergiste", tileX: 43, tileY: 21,
-               dialogue: "Bienvenue a l'Auberge ! Je reponds aux clients et gere le support.",
-               agentType: "support", patrolRadius: 0),
-        NPCDef(id: "npc_finance", name: "Banquier", tileX: 48, tileY: 21,
-               dialogue: "A la Banque, je suis les revenus, les depenses et le budget de ta company.",
+        NPCDef(id: "npc_marketer", name: "Media Buyer", tileX: 38, tileY: 21,
+               dialogue: "On cree tes videos ads et lance les campagnes Meta.",
+               agentType: "marketer", patrolRadius: 0),
+        NPCDef(id: "npc_finance", name: "Banquier", tileX: 52, tileY: 21,
+               dialogue: "Configure Stripe Connect pour recevoir tes paiements.",
                agentType: "finance", patrolRadius: 0),
-        NPCDef(id: "npc_content", name: "Scribe", tileX: 52, tileY: 21,
-               dialogue: "A l'Atelier, je cree des articles, des visuels et des documents pour ta marque.",
-               agentType: "content", patrolRadius: 0),
+        NPCDef(id: "npc_guide", name: "Le Sage", tileX: 30, tileY: 22,
+               dialogue: "Bienvenue, fondateur ! 4 batiments : QG, Site Web, Ads, Paiements.",
+               agentType: nil, patrolRadius: 0),
     ]
 
     // MARK: - Quest-chain-aware NPC dialogues
@@ -373,18 +361,21 @@ enum VillageMap {
         let buildingName = buildingDisplayName(for: agentType)
         let buildingDesc = buildingDescription(for: agentType)
 
-        let myStep = questChain.first { $0.agentType == agentType && !$0.isCompleted }
-        let myCompletedSteps = questChain.filter { $0.agentType == agentType && $0.isCompleted }
+        let relatedTypes = Set(polisiaAgentTypes(for: agentType))
+        let myStep = questChain.first { relatedTypes.contains($0.agentType) && !$0.isCompleted }
+        let myCompletedSteps = questChain.filter { relatedTypes.contains($0.agentType) && $0.isCompleted }
 
         if justCompletedMission {
-            let nextStep = questChain.first { $0.isAvailable && $0.agentType != agentType }
+            let nextStep = questChain.first {
+                $0.isAvailable && !relatedTypes.contains($0.agentType)
+            }
             var pages: [DialoguePage] = [
                 DialoguePage(text: "Bravo ! La mission est terminee.", choices: nil),
                 DialoguePage(text: "Ton livrable est pret. Approche-toi du batiment pour le recuperer.", choices: nil),
             ]
             if let next = nextStep {
-                let nextBuilding = buildingDisplayName(for: next.agentType)
-                let nextNPC = npcName(for: next.agentType)
+                let nextBuilding = buildingDisplayName(for: polisiaBuildingAgent(for: next.agentType))
+                let nextNPC = npcName(for: polisiaBuildingAgent(for: next.agentType))
                 pages.append(DialoguePage(
                     text: "Prochaine etape : va voir \(nextNPC) a \(nextBuilding) pour \"\(next.title)\".",
                     choices: [("RECUPERER", .openQuests), ("COMPRIS", .close)]
@@ -606,43 +597,31 @@ enum VillageMap {
     }
 
     static func buildingDisplayName(for agentType: String) -> String {
-        switch agentType {
-        case "builder": return "la Forge"
-        case "marketer": return "l'Agence"
-        case "researcher": return "l'Observatoire"
+        switch polisiaBuildingAgent(for: agentType) {
+        case "builder": return "le Site Web"
+        case "marketer": return "les Ads"
         case "orchestrator": return "le QG"
-        case "outreach": return "le Bureau de Poste"
-        case "support": return "l'Auberge"
-        case "finance": return "la Banque"
-        case "content": return "l'Atelier"
+        case "finance": return "les Paiements"
         default: return "ce batiment"
         }
     }
 
     private static func buildingDescription(for agentType: String) -> String {
-        switch agentType {
-        case "builder": return "Ici, on code des landing pages, des sites et des briefs produit."
-        case "marketer": return "A l'Agence, on ecrit tes pubs, analyse la concurrence et planifie tes campagnes ads."
-        case "researcher": return "A l'Observatoire, on analyse le marche, les concurrents et on trouve les meilleurs fournisseurs."
-        case "orchestrator": return "Au QG, on coordonne la strategie, le tracking et l'optimisation globale."
-        case "outreach": return "Au Bureau de Poste, on gere la prospection et les emails de ta boite."
-        case "support": return "A l'Auberge, on met en place le support client, la FAQ et les templates de reponse."
-        case "finance": return "A la Banque, on gere les paiements, le budget et la tresorerie."
-        case "content": return "A l'Atelier, on cree la charte graphique, les visuels et les pubs creatives."
+        switch polisiaBuildingAgent(for: agentType) {
+        case "builder": return "Genere et heberge ton site live sur ton sous-domaine."
+        case "marketer": return "Cree des videos ads et lance les campagnes Meta."
+        case "orchestrator": return "Recherche marche, docs business et strategie."
+        case "finance": return "Configure Stripe Connect pour recevoir tes payouts."
         default: return "Un batiment specialise du village."
         }
     }
 
     private static func npcName(for agentType: String) -> String {
-        switch agentType {
-        case "builder": return "le Forgeron"
-        case "marketer": return "l'Agent"
-        case "researcher": return "l'Observateur"
+        switch polisiaBuildingAgent(for: agentType) {
+        case "builder": return "le Webmaster"
+        case "marketer": return "le Media Buyer"
         case "orchestrator": return "le Maire"
-        case "outreach": return "le Messager"
-        case "support": return "l'Aubergiste"
         case "finance": return "le Banquier"
-        case "content": return "le Scribe"
         default: return "l'habitant"
         }
     }
@@ -652,8 +631,10 @@ enum VillageMap {
 
     // MARK: - Filtering by active agent types
 
+    static let polisiaBuildingAgents: Set<String> = ["orchestrator", "builder", "marketer", "finance"]
+
     static func activeBuildings(for agentTypes: Set<String>) -> [BuildingDef] {
-        buildings.filter { agentTypes.contains($0.agentType) }
+        buildings.filter { polisiaBuildingAgents.contains($0.agentType) && agentTypes.contains($0.agentType) }
     }
 
     static func activeNPCs(for agentTypes: Set<String>) -> [NPCDef] {

@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     meta_pixel_id: str = ""
     meta_capi_token: str = ""
     meta_ad_account_id: str = ""
+    meta_page_id: str = ""  # Facebook Page ID for video ad creatives
 
     # Backend public URL — Render services forwardent les webhooks Stripe ici
     backend_public_url: str = ""
@@ -72,6 +73,17 @@ class Settings(BaseSettings):
     neon_api_key: str = ""
     github_token: str = ""
     github_org: str = ""
+
+    # Branded site subdomain — e.g. drypod.rpgagent.app
+    site_base_domain: str = ""
+
+    # Stripe Connect onboarding return URLs (deep links or web)
+    stripe_connect_return_url: str = "rpgagent://stripe/return"
+    stripe_connect_refresh_url: str = "rpgagent://stripe/refresh"
+
+    # Ads wallet — platform fee on daily budget (20% like Polsia)
+    ads_platform_fee_percent: int = 20
+    openai_video_model: str = ""  # optional Sora/video provider hook
 
     @property
     def r2_configured(self) -> bool:

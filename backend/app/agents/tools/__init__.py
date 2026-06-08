@@ -17,6 +17,7 @@ TOOL_CALL_LIMITS: dict[str, int] = {
     "meta_ads_action": 3,
     "x_action": 2,
     "generate_image": 3,
+    "generate_video": 3,
     "store_asset": 3,
     "company_assets": 5,
     "web_search": 5,
@@ -75,7 +76,7 @@ MISSION_TOOLS: dict[str, list[str]] = {
     "payment_setup": ["web_search", "stripe_action", "store_asset", "company_assets"],
     "competitor_ads_analysis": ["web_search", "web_scrape", "browser_action", "google_trends", "query_learnings", "store_asset", "company_assets"],
     "ad_copy_pack": ["web_search", "generate_image", "store_asset", "company_assets"],
-    "ad_creation": ["web_search", "generate_image", "store_asset", "company_assets", "meta_ads_action"],
+    "ad_creation": ["web_search", "generate_image", "generate_video", "store_asset", "company_assets", "meta_ads_action"],
     "analytics_tracking": ["web_search", "store_asset", "company_assets"],
     "optimization_audit": ["web_search", "web_scrape", "browser_action", "query_learnings", "store_asset", "company_assets"],
     "aso_optimization": ["web_search", "google_trends", "query_learnings", "store_asset", "company_assets"],
@@ -225,6 +226,10 @@ def get_company_tool_registry(
     from app.agents.tools.deploy_site import create_deploy_site_tool
     registry.register(create_deploy_site_tool(company_slug=company_slug))
 
+    if settings.replicate_api_token:
+        from app.agents.tools.generate_video import create_generate_video_tool
+        registry.register(create_generate_video_tool(company_id=company_id, company_slug=company_slug))
+
     if settings.stripe_secret_key:
         from app.agents.tools.stripe_action import create_stripe_action_tool
         registry.register(create_stripe_action_tool(
@@ -253,6 +258,8 @@ def _register_all_tools(registry: ToolRegistry) -> None:
     if settings.replicate_api_token:
         from app.agents.tools.generate_image import create_generate_image_tool
         registry.register(create_generate_image_tool(settings.replicate_api_token))
+        from app.agents.tools.generate_video import create_generate_video_tool
+        registry.register(create_generate_video_tool())
 
     # send_email is registered per-mission with company context via get_company_tools()
     # A default global registration is kept for backwards compatibility

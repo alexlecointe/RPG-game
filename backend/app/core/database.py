@@ -71,6 +71,8 @@ async def _migrate_sqlite(eng) -> None:
         ("companies", "neon_project_id", "VARCHAR(64)"),
         ("companies", "github_repo_url", "VARCHAR(500)"),
         ("companies", "stripe_connect_account_id", "VARCHAR(64)"),
+        ("companies", "daily_ads_budget_cents", "INTEGER DEFAULT 0"),
+        ("companies", "ads_wallet_balance_cents", "INTEGER DEFAULT 0"),
     ]
 
     async with eng.begin() as conn:

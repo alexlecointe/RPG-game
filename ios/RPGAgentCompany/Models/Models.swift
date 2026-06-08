@@ -49,18 +49,18 @@ enum BusinessType: String, Codable, CaseIterable {
         switch self {
         case .ecommerce:
             return [
-                1: [], 2: [1], 3: [2], 4: [2], 5: [3, 4],
-                6: [5], 7: [5], 8: [7], 9: [6, 8], 10: [9], 11: [5], 12: [10]
+                1: [], 2: [1], 3: [1], 4: [3], 5: [3, 4],
+                6: [5], 7: [5], 8: [6, 7]
             ]
         case .app:
             return [
                 1: [], 2: [1], 3: [2], 4: [2, 3], 5: [4],
-                6: [4], 7: [5], 8: [6, 7], 9: [4], 10: [8]
+                6: [4], 7: [5, 6]
             ]
         case .saas:
             return [
-                1: [], 2: [1], 3: [2], 4: [2, 3], 5: [4],
-                6: [4], 7: [4], 8: [4], 9: [8], 10: [5, 6, 7], 11: [10]
+                1: [], 2: [1], 3: [1], 4: [3], 5: [3, 4],
+                6: [5], 7: [5], 8: [6, 7]
             ]
         }
     }
@@ -91,14 +91,11 @@ struct Building: Codable, Identifiable {
 
     var displayName: String {
         switch agentType {
-        case "builder": return "Forge"
-        case "marketer": return "Agence"
-        case "researcher": return "Observatoire"
         case "orchestrator": return "QG"
-        case "outreach": return "Poste"
-        case "support": return "Auberge"
-        case "finance": return "Banque"
-        case "content": return "Atelier"
+        case "builder": return "Site Web"
+        case "marketer": return "Ads"
+        case "finance": return "Paiements"
+        case "researcher", "content", "support", "outreach": return "QG"
         default: return agentType
         }
     }
@@ -133,6 +130,7 @@ struct Wallet: Codable {
 struct Company: Codable, Identifiable {
     let id: String
     let name: String
+    let slug: String?
     let missionStatement: String
     let productDescription: String
     let targetAudience: String
@@ -140,14 +138,24 @@ struct Company: Codable, Identifiable {
     let level: Int
     let xp: Int
     let buildings: [Building]
+    let renderUrl: String?
+    let siteUrl: String?
+    let stripeConnectStatus: String?
+    let dailyAdsBudgetCents: Int?
+    let adsWalletBalanceCents: Int?
     let wallet: Wallet
 
     enum CodingKeys: String, CodingKey {
-        case id, name, level, xp, buildings, wallet
+        case id, name, slug, level, xp, buildings, wallet
         case missionStatement = "mission_statement"
         case productDescription = "product_description"
         case targetAudience = "target_audience"
         case businessType = "business_type"
+        case renderUrl = "render_url"
+        case siteUrl = "site_url"
+        case stripeConnectStatus = "stripe_connect_status"
+        case dailyAdsBudgetCents = "daily_ads_budget_cents"
+        case adsWalletBalanceCents = "ads_wallet_balance_cents"
     }
 }
 

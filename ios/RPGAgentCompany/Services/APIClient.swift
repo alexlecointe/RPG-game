@@ -24,6 +24,22 @@ struct DailyRewardResponse: Codable {
     }
 }
 
+struct StripeStatusResponse: Codable {
+    let status: String
+    let chargesEnabled: Bool?
+    let payoutsEnabled: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case status
+        case chargesEnabled = "charges_enabled"
+        case payoutsEnabled = "payouts_enabled"
+    }
+}
+
+struct StripeOnboardingResponse: Codable {
+    let url: String
+}
+
 struct BetaFeedbackResponse: Codable {
     let id: String
     let missionType: String
@@ -170,6 +186,26 @@ final class APIClient {
 
     func startQuestStep(companyId: String, stepNumber: Int) async throws -> Mission {
         try await postEmpty("/companies/\(companyId)/quest-chain/\(stepNumber)/start")
+    }
+
+    func fetchStripeStatus(companyId: String) async throws -> StripeStatusResponse {
+        try await get("/companies/\(companyId)/stripe/status")
+    }
+
+    func startStripeOnboarding(companyId: String) async throws -> String {
+        let resp: StripeOnboardingResponse = try await postEmpty("/companies/\(companyId)/stripe/onboarding")
+        return resp.url
+    }
+
+    func setAdsBudget(companyId: String, dailyBudgetCents: Int) async throws {
+        let _: [String: Int] = try await postJSON(
+            "/companies/\(companyId)/ads/budget",
+            body: ["daily_budget_cents": dailyBudgetCents]
+        )
+    }
+
+    func chargeAdsWallet(companyId: String) async throws -> [String: Int] {
+        try await postEmpty("/companies/\(companyId)/ads/wallet/charge")
     }
 
     func submitBetaFeedback(

@@ -28,7 +28,7 @@ STORE_ASSET_SCHEMA = {
         },
         "asset_type": {
             "type": "string",
-            "enum": ["image", "document", "code"],
+            "enum": ["image", "document", "code", "video"],
             "description": "Type of asset being stored.",
             "default": "image",
         },

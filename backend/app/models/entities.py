@@ -77,6 +77,8 @@ class Company(Base):
     neon_project_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     github_repo_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     stripe_connect_account_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    daily_ads_budget_cents: Mapped[int] = mapped_column(Integer, default=0)
+    ads_wallet_balance_cents: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     user: Mapped["User"] = relationship(back_populates="companies")
@@ -190,6 +192,7 @@ class NotificationType(str, enum.Enum):
     CHAIN_COMPLETED = "chain_completed"
     PAYMENT_RECEIVED = "payment_received"
     CEO_NEXT_MOVE = "ceo_next_move"
+    SYSTEM = "system"
 
 
 class CompanyNotification(Base):
@@ -498,5 +501,78 @@ class RecurringMission(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+    company: Mapped["Company"] = relationship()
+
+
+class AdCampaignStatus(str, enum.Enum):
+    DRAFT = "draft"
+    ACTIVE = "active"
+    PAUSED = "paused"
+    BLOCKED = "blocked"
+
+
+class AdCampaign(Base):
+    __tablename__ = "ad_campaigns"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    meta_campaign_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    meta_ad_set_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    name: Mapped[str] = mapped_column(String(200))
+    status: Mapped[AdCampaignStatus] = mapped_column(
+        Enum(AdCampaignStatus, native_enum=False), default=AdCampaignStatus.DRAFT
+    )
+    daily_budget_cents: Mapped[int] = mapped_column(Integer, default=0)
+    spend_cents: Mapped[int] = mapped_column(Integer, default=0)
+    impressions: Mapped[int] = mapped_column(Integer, default=0)
+    clicks: Mapped[int] = mapped_column(Integer, default=0)
+    ctr: Mapped[float] = mapped_column(Float, default=0.0)
+    cpc_cents: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    company: Mapped["Company"] = relationship()
+    creatives: Mapped[list["AdCreative"]] = relationship(back_populates="campaign")
+
+
+class AdCreative(Base):
+    __tablename__ = "ad_creatives"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    campaign_id: Mapped[str] = mapped_column(ForeignKey("ad_campaigns.id"), index=True)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    meta_ad_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    meta_creative_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    title: Mapped[str] = mapped_column(String(200), default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    video_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    thumbnail_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="draft")
+    spend_cents: Mapped[int] = mapped_column(Integer, default=0)
+    impressions: Mapped[int] = mapped_column(Integer, default=0)
+    clicks: Mapped[int] = mapped_column(Integer, default=0)
+    ctr: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    campaign: Mapped["AdCampaign"] = relationship(back_populates="creatives")
+    company: Mapped["Company"] = relationship()
+
+
+class AdSnapshot(Base):
+    __tablename__ = "ad_snapshots"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    campaign_id: Mapped[Optional[str]] = mapped_column(ForeignKey("ad_campaigns.id"), nullable=True)
+    spend_cents: Mapped[int] = mapped_column(Integer, default=0)
+    impressions: Mapped[int] = mapped_column(Integer, default=0)
+    clicks: Mapped[int] = mapped_column(Integer, default=0)
+    ctr: Mapped[float] = mapped_column(Float, default=0.0)
+    cpc_cents: Mapped[int] = mapped_column(Integer, default=0)
+    note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     company: Mapped["Company"] = relationship()

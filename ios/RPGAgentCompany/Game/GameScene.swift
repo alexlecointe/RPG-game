@@ -28,7 +28,7 @@ final class GameScene: SKScene {
     private var npcSprites: [String: SKSpriteNode] = [:]
     private var dailyChestNode: SKSpriteNode?
     var playerLevel: Int = 1
-    var activeAgentTypes: Set<String> = Set(["builder","marketer","researcher","orchestrator","outreach","support","finance","content"])
+    var activeAgentTypes: Set<String> = VillageMap.polisiaBuildingAgents
     private var lockedZoneOverlays: [SKNode] = []
     private var wasNearSage = false
     private var wasNearInteractable = false

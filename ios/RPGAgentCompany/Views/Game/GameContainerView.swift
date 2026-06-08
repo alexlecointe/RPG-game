@@ -301,30 +301,28 @@ struct GameContainerView: View {
         guard let buildings = appState.company?.buildings else { return }
 
         for building in buildings {
-            let agentMissions = appState.missions.filter { $0.agentType == building.agentType }
+            let agentTypes = Set(VillageMap.polisiaAgentTypes(for: building.agentType))
+            let agentMissions = appState.missions.filter { agentTypes.contains($0.agentType) }
+            let buildingId = buildingIdForAgent(building.agentType)
             if agentMissions.contains(where: { $0.status == "running" || $0.status == "pending" }) {
-                scene.updateBuildingMissionState(buildingId: buildingIdForAgent(building.agentType), state: .running)
+                scene.updateBuildingMissionState(buildingId: buildingId, state: .running)
             } else if let completed = agentMissions.first(where: { $0.status == "completed" && $0.deliverable != nil }) {
                 scene.updateBuildingMissionState(
-                    buildingId: buildingIdForAgent(building.agentType),
+                    buildingId: buildingId,
                     state: .completed(missionId: completed.id)
                 )
             } else {
-                scene.updateBuildingMissionState(buildingId: buildingIdForAgent(building.agentType), state: .idle)
+                scene.updateBuildingMissionState(buildingId: buildingId, state: .idle)
             }
         }
     }
 
     private func buildingIdForAgent(_ agentType: String) -> String {
         switch agentType {
+        case "orchestrator": return "hq"
         case "builder": return "forge"
         case "marketer": return "market"
-        case "researcher": return "lab"
-        case "orchestrator": return "hq"
-        case "outreach": return "post_office"
-        case "support": return "inn"
         case "finance": return "bank"
-        case "content": return "workshop"
         default: return ""
         }
     }
@@ -365,7 +363,9 @@ struct GameContainerView: View {
         scene.scaleMode = .aspectFill
         scene.playerLevel = appState.company?.level ?? 1
         if let buildings = appState.company?.buildings {
-            scene.activeAgentTypes = Set(buildings.map { $0.agentType })
+            scene.activeAgentTypes = Set(
+                buildings.map { $0.agentType }.filter { VillageMap.polisiaBuildingAgents.contains($0) }
+            )
         }
 
         previousXP = appState.company?.xp ?? 0
@@ -379,11 +379,15 @@ struct GameContainerView: View {
         }
 
         scene.callbacks.onNPCInteract = { npc in
+            let relatedTypes: Set<String> = {
+                guard let at = npc.agentType else { return [] }
+                return Set(VillageMap.polisiaAgentTypes(for: at))
+            }()
             let hasRunning = appState.missions.contains {
-                $0.agentType == (npc.agentType ?? "") && ($0.status == "running" || $0.status == "pending")
+                relatedTypes.contains($0.agentType) && ($0.status == "running" || $0.status == "pending")
             }
             let hasCompleted = appState.missions.contains {
-                $0.agentType == (npc.agentType ?? "") && $0.status == "completed" && $0.deliverable != nil
+                relatedTypes.contains($0.agentType) && $0.status == "completed" && $0.deliverable != nil
             }
             let visitedKey = "visited_\(npc.id)"
             let isFirstVisit = !UserDefaults.standard.bool(forKey: visitedKey)

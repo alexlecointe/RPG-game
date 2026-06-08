@@ -169,34 +169,57 @@ struct LootRevealView: View {
 
     // MARK: - Actions
 
+    private var liveSiteUrl: String? {
+        if let url = appState.company?.siteUrl, !url.isEmpty { return url }
+        if mission.missionType == "landing_page", let d = mission.deliverable {
+            if let range = d.range(of: #"https?://[^\s]+"#, options: .regularExpression) {
+                return String(d[range])
+            }
+        }
+        return nil
+    }
+
     private var actionButtons: some View {
-        HStack(spacing: 12) {
-            if let deliverable = mission.deliverable {
-                Button(action: {
-                    UIPasteboard.general.string = deliverable
-                    copied = true
-                    AnalyticsTracker.track("deliverable_copied", properties: [
-                        "mission_type": mission.missionType,
-                    ])
-                }) {
+        VStack(spacing: 10) {
+            if mission.missionType == "landing_page", let siteUrl = liveSiteUrl, let url = URL(string: siteUrl) {
+                Link(destination: url) {
                     HStack(spacing: 4) {
-                        Text(copied ? "✓" : "📋")
-                        Text(copied ? "COPIE !" : DeliverableHelper.copyButtonLabel(for: mission.missionType))
+                        Text("🌐")
+                        Text("OUVRIR LE SITE")
                     }
                     .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(PixelButtonStyle(color: PixelTheme.bgLight))
+                .buttonStyle(PixelButtonStyle(color: PixelTheme.accentGreen))
+            }
 
-                ShareLink(item: deliverable) {
-                    HStack(spacing: 4) {
-                        Text("📤")
-                        Text("PARTAGER")
+            HStack(spacing: 12) {
+                if let deliverable = mission.deliverable {
+                    Button(action: {
+                        UIPasteboard.general.string = deliverable
+                        copied = true
+                        AnalyticsTracker.track("deliverable_copied", properties: [
+                            "mission_type": mission.missionType,
+                        ])
+                    }) {
+                        HStack(spacing: 4) {
+                            Text(copied ? "✓" : "📋")
+                            Text(copied ? "COPIE !" : DeliverableHelper.copyButtonLabel(for: mission.missionType))
+                        }
+                        .frame(maxWidth: .infinity)
                     }
-                    .font(PixelTheme.bodyFont)
-                    .foregroundStyle(PixelTheme.bgDark)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-                    .background(PixelTheme.accent, in: RoundedRectangle(cornerRadius: PixelTheme.buttonRadius))
+                    .buttonStyle(PixelButtonStyle(color: PixelTheme.bgLight))
+
+                    ShareLink(item: deliverable) {
+                        HStack(spacing: 4) {
+                            Text("📤")
+                            Text("PARTAGER")
+                        }
+                        .font(PixelTheme.bodyFont)
+                        .foregroundStyle(PixelTheme.bgDark)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(PixelTheme.accent, in: RoundedRectangle(cornerRadius: PixelTheme.buttonRadius))
+                    }
                 }
             }
         }
