@@ -27,6 +27,10 @@ final class AppState: ObservableObject {
     @Published var showQuestChainOnLaunch = false
     @Published var sageMessages: [SageMessage] = []
     @Published var isSageLoading = false
+    @Published var subscription: SubscriptionInfo?
+    @Published var taskQueue: [Mission] = []
+    @Published var recurringMissions: [RecurringMission] = []
+    @Published var notifications: [CompanyNotification] = []
 
     private let api = APIClient.shared
     private let deviceIdKey = "rpg_device_id"
@@ -42,6 +46,96 @@ final class AppState: ObservableObject {
         let id = UUID().uuidString
         UserDefaults.standard.set(id, forKey: deviceIdKey)
         return id
+    }
+
+    func fetchSubscription() async {
+        guard let companyId = company?.id else { return }
+        subscription = try? await api.fetchSubscription(companyId: companyId)
+    }
+
+    func fetchTaskQueue() async {
+        guard let companyId = company?.id else { return }
+        if let queue = try? await api.fetchTaskQueue(companyId: companyId) {
+            taskQueue = queue.sorted { ($0.queueOrder ?? 999) < ($1.queueOrder ?? 999) }
+        }
+    }
+
+    func fetchRecurringMissions() async {
+        guard let companyId = company?.id else { return }
+        if let list = try? await api.fetchRecurringMissions(companyId: companyId) {
+            recurringMissions = list
+        }
+    }
+
+    func createRecurringMission(missionType: String, frequency: String, dayOfWeek: Int? = nil, dayOfMonth: Int? = nil, hourUtc: Int = 9) async {
+        guard let companyId = company?.id else { return }
+        let body = RecurringMissionCreate(missionType: missionType, frequency: frequency, dayOfWeek: dayOfWeek, dayOfMonth: dayOfMonth, hourUtc: hourUtc)
+        if let rm = try? await api.createRecurringMission(companyId: companyId, body: body) {
+            recurringMissions.insert(rm, at: 0)
+        }
+    }
+
+    func deleteRecurringMission(id: String) async {
+        try? await api.deleteRecurringMission(recurringId: id)
+        recurringMissions.removeAll { $0.id == id }
+    }
+
+    var unreadNotificationCount: Int {
+        notifications.filter { !$0.read }.count
+    }
+
+    func fetchNotifications() async {
+        guard let companyId = company?.id else { return }
+        if let list = try? await api.fetchNotifications(companyId: companyId) {
+            notifications = list
+        }
+    }
+
+    func markNotificationsRead() async {
+        guard let companyId = company?.id else { return }
+        try? await api.markNotificationsRead(companyId: companyId)
+        notifications = notifications.map { n in
+            CompanyNotification(id: n.id, type: n.type, title: n.title, message: n.message, read: true, createdAt: n.createdAt)
+        }
+    }
+
+    func startNotificationPolling() {
+        Task {
+            while company != nil {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                await fetchNotifications()
+            }
+        }
+    }
+
+    func toggleAutoPilot() async {
+        guard let company else { return }
+        let newValue = !company.autoPilot
+        if let updated = try? await api.toggleAutoPilot(companyId: company.id, enabled: newValue) {
+            self.company = updated
+        }
+    }
+
+    func rejectTask(id: String, reason: String = "user_cancelled") async {
+        do {
+            try await api.rejectTask(missionId: id, reason: reason)
+            taskQueue.removeAll { $0.id == id }
+            await fetchSubscription()
+        } catch {
+            errorMessage = "Impossible de rejeter la tâche"
+        }
+    }
+
+    func moveToTop(id: String) async {
+        do {
+            let updated = try await api.moveTaskToTop(missionId: id)
+            if let idx = taskQueue.firstIndex(where: { $0.id == id }) {
+                taskQueue.remove(at: idx)
+                taskQueue.insert(updated, at: 0)
+            }
+        } catch {
+            errorMessage = "Impossible de déplacer la tâche"
+        }
     }
 
     func bootstrap() async {
@@ -69,11 +163,13 @@ final class AppState: ObservableObject {
                     catalog = try await api.fetchCatalog()
                     missions = try await api.fetchMissions(companyId: savedCompanyId)
                     questChain = (try? await api.fetchQuestChain(companyId: savedCompanyId)) ?? []
+                    subscription = try? await api.initSubscription(companyId: savedCompanyId)
                     hasCompletedOnboarding = true
                     // #region agent log
                     APIClient.debugLog("bootstrap SUCCESS", data: ["attempt": attempt], hypothesis: "H1", location: "AppState.bootstrap")
                     // #endregion
                     checkDailyChest()
+                    startNotificationPolling()
                     return
                 } catch {
                     // #region agent log
@@ -232,16 +328,14 @@ final class AppState: ObservableObject {
         defer { isLoading = false }
         do {
             let mission = try await api.startQuestStep(companyId: companyId, stepNumber: stepNumber)
-            missions.insert(mission, at: 0)
-            AnalyticsTracker.track("mission_started", properties: [
+            taskQueue.append(mission)
+            taskQueue.sort { ($0.queueOrder ?? 999) < ($1.queueOrder ?? 999) }
+            AnalyticsTracker.track("mission_queued", properties: [
                 "mission_type": mission.missionType,
                 "source": "quest_chain",
                 "step": "\(stepNumber)",
             ])
-            await fetchQuestChain()
-            addActivityLog("Quest step \(stepNumber) lancee")
-            await pollUntilComplete(missionId: mission.id)
-            await refreshCompany()
+            addActivityLog("Quest step \(stepNumber) ajoutée à la file")
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -285,20 +379,15 @@ final class AppState: ObservableObject {
         defer { isLoading = false }
         do {
             let mission = try await api.startMission(companyId: companyId, missionType: type)
-            missions.insert(mission, at: 0)
-            AnalyticsTracker.track("mission_started", properties: [
+            taskQueue.append(mission)
+            taskQueue.sort { ($0.queueOrder ?? 999) < ($1.queueOrder ?? 999) }
+            AnalyticsTracker.track("mission_queued", properties: [
                 "mission_type": type,
                 "source": "catalog",
             ])
             completeQuest("first_mission")
-            addActivityLog("Mission \(type) lancee")
-            await pollUntilComplete(missionId: mission.id)
-            await refreshCompany()
-            if let m = missions.first(where: { $0.id == mission.id }), m.status == "completed" {
-                completeQuest("first_deliverable")
-                addActivityLog("Mission \(type) terminee !")
-            }
-            return missions.first { $0.id == mission.id }
+            addActivityLog("Mission \(type) ajoutée à la file")
+            return mission
         } catch {
             errorMessage = error.localizedDescription
             return nil

@@ -61,6 +61,7 @@ class CompanyOut(BaseModel):
     stripe_connect_status: str = "not_started"  # not_started | pending | ready
     daily_ads_budget_cents: int = 0
     ads_wallet_balance_cents: int = 0
+    auto_pilot: bool = False
     wallet: WalletOut
 
     model_config = {"from_attributes": True}
@@ -92,6 +93,11 @@ class MissionOut(BaseModel):
     agent_type: AgentType
     mission_type: str
     status: MissionStatus
+    source: Optional[str] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
+    queue_order: Optional[int] = None
+    rejected_reason: Optional[str] = None
     credits_cost: int
     xp_reward: int
     deliverable_format: Optional[str]
@@ -337,6 +343,15 @@ class AdCampaignOut(BaseModel):
     ctr: float
     cpc_cents: int
     meta_campaign_id: Optional[str] = None
+    targeting_json: Optional[str] = None
+    objective: Optional[str] = None
+    call_to_action: Optional[str] = None
+    purchase_roas: Optional[float] = None
+    hours_since_activation: Optional[int] = None
+    reach: Optional[int] = None
+    frequency: Optional[float] = None
+    video_views: Optional[int] = None
+    video_thruplay_watched: Optional[int] = None
 
     model_config = {"from_attributes": True}
 
@@ -355,3 +370,81 @@ class AdCreativeOut(BaseModel):
     ctr: float
 
     model_config = {"from_attributes": True}
+
+
+class AdsSummaryOut(BaseModel):
+    state: str
+    state_message: Optional[str] = None
+    wallet_balance_cents: int
+    daily_budget_cents: int
+    total_spend_cents: int
+    total_impressions: int
+    total_clicks: int
+    ctr: float
+    cpc_cents: int
+    spend_rollup_7d: list[int] = []
+    campaigns: list[AdCampaignOut]
+    creatives: list[AdCreativeOut]
+    owner_actionable: bool
+    actionable_message: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class WalletTransactionOut(BaseModel):
+    id: str
+    company_id: str
+    amount_cents: int
+    type: str
+    note: str
+    created_at: str
+
+    model_config = {"from_attributes": True}
+
+
+# ---------------------------------------------------------------------------
+# Billing — Polsia-like subscription + credit packs
+# ---------------------------------------------------------------------------
+
+class SubscriptionOut(BaseModel):
+    status: str
+    plan_id: Optional[str] = None
+    plan_label: Optional[str] = None
+    credits_remaining: int = 0
+    pack_credits: int = 0
+    total_credits: int = 0
+    credits_used_period: int = 0
+    credits_monthly: int = 0
+    trial_end: Optional[str] = None
+    current_period_end: Optional[str] = None
+    owner_actionable: bool = False
+    actionable_message: Optional[str] = None
+
+    model_config = {"from_attributes": True}
+
+
+class BillingPlanOut(BaseModel):
+    id: str
+    label: str
+    cents: int
+    credits: int
+    price_display: str
+    is_current: bool = False
+
+
+class CreditPackOut(BaseModel):
+    id: str
+    label: str
+    cents: int
+    credits: int
+    price_display: str
+
+
+class BillingPlansResponse(BaseModel):
+    plans: list[BillingPlanOut]
+    packs: list[CreditPackOut]
+    current_subscription: Optional[SubscriptionOut] = None
+
+
+class CheckoutSessionOut(BaseModel):
+    checkout_url: str

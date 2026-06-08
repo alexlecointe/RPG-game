@@ -20,6 +20,14 @@ class MissionStatus(str, enum.Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    REJECTED = "rejected"
+
+
+class TaskSource(str, enum.Enum):
+    USER = "user"
+    CEO_PROPOSAL = "ceo_proposal"
+    AGENT_GENERATED = "agent_generated"
+    RECURRING_TASK = "recurring_task"
 
 
 class BusinessType(str, enum.Enum):
@@ -37,6 +45,11 @@ class AgentType(str, enum.Enum):
     SUPPORT = "support"
     FINANCE = "finance"
     CONTENT = "content"
+    # Polsia extended agent types
+    BROWSER = "browser"
+    DATA = "data"
+    OPS = "ops"
+    GROWTH = "growth"
 
 
 class User(Base):
@@ -79,6 +92,8 @@ class Company(Base):
     stripe_connect_account_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     daily_ads_budget_cents: Mapped[int] = mapped_column(Integer, default=0)
     ads_wallet_balance_cents: Mapped[int] = mapped_column(Integer, default=0)
+    ads_payment_state: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    ads_winding_down: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     user: Mapped["User"] = relationship(back_populates="companies")
@@ -103,6 +118,39 @@ class Wallet(Base):
     company: Mapped["Company"] = relationship(back_populates="wallet")
 
 
+class SubscriptionStatus(str, enum.Enum):
+    TRIAL = "trial"
+    ACTIVE = "active"
+    CANCELLED = "cancelled"
+    PAST_DUE = "past_due"
+    EXPIRED = "expired"
+
+
+class Subscription(Base):
+    """Polsia-like subscription — task credits per month, separate from Stripe Connect."""
+    __tablename__ = "subscriptions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), unique=True, index=True)
+    stripe_customer_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    stripe_subscription_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    plan_id: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # "starter" | "growth" | etc.
+    status: Mapped[SubscriptionStatus] = mapped_column(
+        Enum(SubscriptionStatus, native_enum=False), default=SubscriptionStatus.TRIAL
+    )
+    credits_monthly: Mapped[int] = mapped_column(Integer, default=0)    # allocation plan
+    credits_remaining: Mapped[int] = mapped_column(Integer, default=0)  # current balance (plan credits)
+    credits_used_period: Mapped[int] = mapped_column(Integer, default=0)
+    pack_credits: Mapped[int] = mapped_column(Integer, default=0)       # one-shot pack credits
+    welcome_bonus_given: Mapped[bool] = mapped_column(Boolean, default=False)
+    trial_end: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    current_period_start: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    current_period_end: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    company: Mapped["Company"] = relationship()
+
+
 class Building(Base):
     __tablename__ = "buildings"
 
@@ -122,6 +170,13 @@ class Mission(Base):
     agent_type: Mapped[AgentType] = mapped_column(Enum(AgentType, native_enum=False))
     mission_type: Mapped[str] = mapped_column(String(64))
     status: Mapped[MissionStatus] = mapped_column(Enum(MissionStatus, native_enum=False), default=MissionStatus.PENDING)
+    source: Mapped[TaskSource] = mapped_column(
+        Enum(TaskSource, native_enum=False), default=TaskSource.USER
+    )
+    title: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    queue_order: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    rejected_reason: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     credits_cost: Mapped[int] = mapped_column(Integer)
     xp_reward: Mapped[int] = mapped_column(Integer, default=0)
     is_auto_generated: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -193,6 +248,7 @@ class NotificationType(str, enum.Enum):
     PAYMENT_RECEIVED = "payment_received"
     CEO_NEXT_MOVE = "ceo_next_move"
     SYSTEM = "system"
+    ADS = "ads"
 
 
 class CompanyNotification(Base):
@@ -529,6 +585,18 @@ class AdCampaign(Base):
     clicks: Mapped[int] = mapped_column(Integer, default=0)
     ctr: Mapped[float] = mapped_column(Float, default=0.0)
     cpc_cents: Mapped[int] = mapped_column(Integer, default=0)
+    # Polsia-like fields
+    targeting_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    objective: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    call_to_action: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    purchase_roas: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    hours_since_activation: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    reach: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    frequency: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    video_views: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    video_thruplay_watched: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    last_scale_notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_split_notified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -573,6 +641,87 @@ class AdSnapshot(Base):
     ctr: Mapped[float] = mapped_column(Float, default=0.0)
     cpc_cents: Mapped[int] = mapped_column(Integer, default=0)
     note: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    company: Mapped["Company"] = relationship()
+
+
+class WalletTransaction(Base):
+    __tablename__ = "wallet_transactions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    amount_cents: Mapped[int] = mapped_column(Integer, default=0)
+    type: Mapped[str] = mapped_column(String(20), default="credit")  # "credit" | "debit" | "fee"
+    note: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    company: Mapped["Company"] = relationship()
+
+
+# ---------------------------------------------------------------------------
+# PaymentLink — liens Stripe créés par l'agent ou le founder (Système B)
+# ---------------------------------------------------------------------------
+
+class PaymentLink(Base):
+    """Permanent Stripe Payment Link created for a founder's product."""
+    __tablename__ = "payment_links"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    stripe_payment_link_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    url: Mapped[str] = mapped_column(String(500))
+    product_name: Mapped[str] = mapped_column(String(255))
+    amount_cents: Mapped[int] = mapped_column(Integer, default=0)
+    currency: Mapped[str] = mapped_column(String(3), default="eur")
+    stripe_product_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    stripe_price_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    company: Mapped["Company"] = relationship()
+
+
+# ---------------------------------------------------------------------------
+# God Mode sessions — session autonome achetée séparément (Polsia exact)
+# ---------------------------------------------------------------------------
+
+class GodModeSession(Base):
+    """One-shot autonomous agent session — does NOT consume task credits."""
+    __tablename__ = "god_mode_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    stripe_payment_intent_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    stripe_session_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    god_plan_id: Mapped[str] = mapped_column(String(20))  # "god_1h" | "god_24h" ...
+    hours: Mapped[int] = mapped_column(Integer, default=1)
+    amount_cents: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(20), default="pending")  # pending | active | expired
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    company: Mapped["Company"] = relationship()
+
+
+# ---------------------------------------------------------------------------
+# Orders — ventes des founders à leurs clients (Système B / Polsia Stripe)
+# ---------------------------------------------------------------------------
+
+class Order(Base):
+    """Customer purchase on a founder's product via Stripe Checkout / Payment Link."""
+    __tablename__ = "orders"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    stripe_payment_intent_id: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    stripe_session_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    customer_email: Mapped[Optional[str]] = mapped_column(String(320), nullable=True)
+    amount_cents: Mapped[int] = mapped_column(Integer, default=0)
+    currency: Mapped[str] = mapped_column(String(3), default="eur")
+    product_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    meta_event_sent: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     company: Mapped["Company"] = relationship()

@@ -42,9 +42,19 @@ class Settings(BaseSettings):
     browserbase_project_id: str = ""
     serpapi_key: str = ""
 
-    # Stripe — payments (Banque building)
+    # Stripe — Connect (Banque building — paiements reçus par le user)
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
+
+    # Stripe — Billing (abonnements + credit packs de la plateforme)
+    stripe_billing_webhook_secret: str = ""
+    stripe_price_starter: str = ""   # 15 credits/mois, $19
+    stripe_price_growth: str = ""    # 25 credits/mois, $29
+    stripe_price_pro: str = ""       # 50 credits/mois, $49
+    stripe_price_scale: str = ""     # 100 credits/mois, $99
+    stripe_price_power: str = ""     # 200 credits/mois, $199
+    stripe_price_ultra: str = ""     # 500 credits/mois, $499
+    stripe_price_max: str = ""       # 1000 credits/mois, $999
 
     # Meta — Pixel + Conversions API + Ads (compte central plateforme)
     meta_pixel_id: str = ""
@@ -83,7 +93,11 @@ class Settings(BaseSettings):
 
     # Ads wallet — platform fee on daily budget (20% like Polsia)
     ads_platform_fee_percent: int = 20
-    openai_video_model: str = ""  # optional Sora/video provider hook
+
+    # Video generation — Sora 2 via OpenAI API (priority provider)
+    # Set OPENAI_VIDEO_MODEL=sora (or the current slug) to enable.
+    # Falls back to Replicate minimax when not set.
+    openai_video_model: str = ""  # e.g. "sora" — see https://platform.openai.com/docs/api-reference/video
 
     @property
     def r2_configured(self) -> bool:

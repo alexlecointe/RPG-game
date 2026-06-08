@@ -156,6 +156,49 @@ final class APIClient {
         try await get("/missions/\(id)")
     }
 
+    // MARK: - Task Queue (Polsia)
+
+    func fetchTaskQueue(companyId: String) async throws -> [Mission] {
+        try await get("/companies/\(companyId)/tasks/queue")
+    }
+
+    func createFreeformTask(companyId: String, title: String, description: String = "", agentType: String? = nil) async throws -> Mission {
+        var body: [String: Any] = ["title": title, "description": description]
+        if let at = agentType { body["agent_type"] = at }
+        return try await postJSON("/companies/\(companyId)/tasks", body: body)
+    }
+
+    func rejectTask(missionId: String, reason: String = "user_cancelled") async throws {
+        let _: Mission = try await postJSON("/missions/\(missionId)/reject", body: ["reason": reason])
+    }
+
+    func moveTaskToTop(missionId: String) async throws -> Mission {
+        try await postEmpty("/missions/\(missionId)/move-to-top")
+    }
+
+    func reorderTask(missionId: String, position: Int) async throws -> Mission {
+        try await patchJSON("/missions/\(missionId)/order", body: ["position": position])
+    }
+
+    func editTask(missionId: String, title: String? = nil, description: String? = nil) async throws -> Mission {
+        var body: [String: Any] = [:]
+        if let t = title { body["title"] = t }
+        if let d = description { body["description"] = d }
+        return try await patchJSON("/missions/\(missionId)", body: body)
+    }
+
+    func routeTask(companyId: String, title: String, description: String = "") async throws -> String {
+        let encoded = title.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? title
+        let descEncoded = description.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+        let resp: [String: String] = try await get("/companies/\(companyId)/tasks/route?title=\(encoded)&description=\(descEncoded)")
+        return resp["recommended_agent"] ?? "orchestrator"
+    }
+
+    /// Manually trigger execution of a PENDING task (Polsia run_link).
+    func executeTask(missionId: String) async throws -> Mission {
+        try await postEmpty("/missions/\(missionId)/execute")
+    }
+
     func fetchMissionLogs(missionId: String) async throws -> [MissionLogEntry] {
         try await get("/missions/\(missionId)/logs")
     }
@@ -206,6 +249,204 @@ final class APIClient {
 
     func chargeAdsWallet(companyId: String) async throws -> [String: Int] {
         try await postEmpty("/companies/\(companyId)/ads/wallet/charge")
+    }
+
+    func fetchAdsSummary(companyId: String) async throws -> AdsSummary {
+        try await get("/companies/\(companyId)/ads/summary")
+    }
+
+    func fetchAdsCampaigns(companyId: String) async throws -> [AdCampaign] {
+        try await get("/companies/\(companyId)/ads/campaigns")
+    }
+
+    func fetchAdsCreatives(companyId: String) async throws -> [AdCreative] {
+        try await get("/companies/\(companyId)/ads/creatives")
+    }
+
+    func pauseAdsCampaign(companyId: String, campaignId: String) async throws {
+        let _: [String: String] = try await postEmpty("/companies/\(companyId)/ads/campaigns/\(campaignId)/pause")
+    }
+
+    func resumeAdsCampaign(companyId: String, campaignId: String) async throws {
+        let _: [String: String] = try await postEmpty("/companies/\(companyId)/ads/campaigns/\(campaignId)/resume")
+    }
+
+    func applyScaleCampaign(companyId: String, campaignId: String) async throws {
+        let _: [String: String] = try await postEmpty("/companies/\(companyId)/ads/campaigns/\(campaignId)/apply-scale")
+    }
+
+    func applySplitWinner(companyId: String, campaignId: String) async throws {
+        let _: [String: String] = try await postEmpty("/companies/\(companyId)/ads/campaigns/\(campaignId)/apply-split-winner")
+    }
+
+    func fetchWalletTransactions(companyId: String, limit: Int = 20) async throws -> [WalletTransaction] {
+        try await get("/companies/\(companyId)/ads/transactions?limit=\(limit)")
+    }
+
+
+    func pauseAllAdsCampaigns(companyId: String, campaigns: [AdCampaign]) async throws {
+        for campaign in campaigns where campaign.status == "active" {
+            try await pauseAdsCampaign(companyId: companyId, campaignId: campaign.id)
+        }
+    }
+
+    func resumeAllAdsCampaigns(companyId: String, campaigns: [AdCampaign]) async throws {
+        for campaign in campaigns where campaign.status != "active" {
+            try await resumeAdsCampaign(companyId: companyId, campaignId: campaign.id)
+        }
+    }
+
+    // MARK: - Auto-pilot
+
+    func toggleAutoPilot(companyId: String, enabled: Bool) async throws -> Company {
+        return try await postJSON("/companies/\(companyId)/auto-pilot", body: ["enabled": enabled])
+    }
+
+    // MARK: - Edit Task
+
+    func editTask(missionId: String, title: String, description: String) async throws -> Mission {
+        return try await patchJSON(
+            "/missions/\(missionId)",
+            body: ["title": title, "description": description]
+        )
+    }
+
+    // MARK: - Notifications
+
+    func fetchNotifications(companyId: String, unreadOnly: Bool = false) async throws -> [CompanyNotification] {
+        let path = "/companies/\(companyId)/notifications?limit=30" + (unreadOnly ? "&unread_only=true" : "")
+        return try await get(path)
+    }
+
+    func markNotificationsRead(companyId: String) async throws {
+        let _: [String: String] = try await postEmpty("/companies/\(companyId)/notifications/read-all")
+    }
+
+    // MARK: - Recurring Missions
+
+    func fetchRecurringMissions(companyId: String) async throws -> [RecurringMission] {
+        try await get("/companies/\(companyId)/recurring-missions")
+    }
+
+    func createRecurringMission(companyId: String, body: RecurringMissionCreate) async throws -> RecurringMission {
+        let payload: [String: Any?] = [
+            "mission_type": body.missionType,
+            "frequency": body.frequency,
+            "day_of_week": body.dayOfWeek,
+            "day_of_month": body.dayOfMonth,
+            "hour_utc": body.hourUtc,
+        ]
+        let clean = payload.compactMapValues { $0 }
+        return try await postJSON("/companies/\(companyId)/recurring-missions", body: clean)
+    }
+
+    func deleteRecurringMission(recurringId: String) async throws {
+        guard let url = URL(string: baseURL + "/recurring-missions/\(recurringId)") else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        let (data, response) = try await session.data(for: request)
+        try validate(response: response, data: data)
+    }
+
+    // MARK: - Billing (Polsia-like)
+
+    func fetchSubscription(companyId: String) async throws -> SubscriptionInfo {
+        try await get("/companies/\(companyId)/billing/subscription")
+    }
+
+    func fetchBillingPlans(companyId: String) async throws -> BillingPlansResponse {
+        try await get("/companies/\(companyId)/billing/plans")
+    }
+
+    func createCheckoutSession(
+        companyId: String,
+        type: String,
+        planOrPackId: String,
+        successUrl: String = "rpgagent://billing/success",
+        cancelUrl: String = "rpgagent://billing/cancel"
+    ) async throws -> String {
+        let resp: CheckoutSessionResponse = try await postJSON(
+            "/companies/\(companyId)/billing/checkout",
+            body: [
+                "type": type,
+                "plan_or_pack_id": planOrPackId,
+                "success_url": successUrl,
+                "cancel_url": cancelUrl,
+            ]
+        )
+        return resp.checkoutUrl
+    }
+
+    func initSubscription(companyId: String) async throws -> SubscriptionInfo {
+        try await postEmpty("/companies/\(companyId)/billing/init")
+    }
+
+    // MARK: - Orders (Système B)
+
+    func fetchOrders(companyId: String, limit: Int = 50) async throws -> OrdersResponse {
+        try await get("/companies/\(companyId)/orders?limit=\(limit)")
+    }
+
+    // MARK: - God Mode
+
+    func fetchGodModePlans() async throws -> GodModePlansResponse {
+        // company_id not strictly needed but endpoint exists per company
+        try await get("/companies/_/billing/god-mode/plans")
+    }
+
+    func fetchGodModePlansFor(companyId: String) async throws -> GodModePlansResponse {
+        try await get("/companies/\(companyId)/billing/god-mode/plans")
+    }
+
+    func createGodModeCheckout(
+        companyId: String,
+        godPlanId: String,
+        successUrl: String = "rpgagent://billing/god-mode/success",
+        cancelUrl: String = "rpgagent://billing/god-mode/cancel"
+    ) async throws -> String {
+        let resp: CheckoutSessionResponse = try await postJSON(
+            "/companies/\(companyId)/billing/god-mode/checkout",
+            body: [
+                "god_plan_id": godPlanId,
+                "success_url": successUrl,
+                "cancel_url": cancelUrl,
+            ]
+        )
+        return resp.checkoutUrl
+    }
+
+    func fetchActiveGodMode(companyId: String) async throws -> GodModeActiveResponse {
+        try await get("/companies/\(companyId)/billing/god-mode/active")
+    }
+
+    func fetchBillingPortalURL(companyId: String) async throws -> String {
+        let resp: PortalSessionResponse = try await get("/companies/\(companyId)/billing/portal")
+        return resp.portalUrl
+    }
+
+    func fetchInvoices(companyId: String) async throws -> InvoicesResponse {
+        try await get("/companies/\(companyId)/billing/invoices")
+    }
+
+    // MARK: - Products & Payment Links (Système B)
+
+    func fetchProducts(companyId: String) async throws -> StripeProductsResponse {
+        try await get("/companies/\(companyId)/products")
+    }
+
+    func createPaymentLink(
+        companyId: String,
+        productName: String,
+        amountCents: Int,
+        currency: String = "eur"
+    ) async throws -> String {
+        struct Resp: Codable { let url: String? }
+        let resp: Resp = try await postJSON(
+            "/companies/\(companyId)/products/payment-link",
+            body: ["product_name": productName, "amount_cents": amountCents, "currency": currency] as [String: Any]
+        )
+        return resp.url ?? ""
     }
 
     func submitBetaFeedback(
@@ -294,6 +535,18 @@ final class APIClient {
         guard let url = URL(string: baseURL + path) else { throw APIError.invalidURL }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await longSession.data(for: request)
+        try validate(response: response, data: data)
+        return try decoder.decode(T.self, from: data)
+    }
+
+    private func patchJSON<T: Decodable>(_ path: String, body: [String: Any]) async throws -> T {
+        guard let url = URL(string: baseURL + path) else { throw APIError.invalidURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)

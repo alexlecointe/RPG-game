@@ -202,6 +202,7 @@ def _build_user_prompt(
     output_format: str = "markdown",
     chain_context: list[dict] | None = None,
     memory_context: list[dict] | None = None,
+    competitor_url: str = "",
 ) -> str:
     parts = [
         f'Company: "{company_name}"',
@@ -209,6 +210,7 @@ def _build_user_prompt(
         f"Mission: {mission_statement}" if mission_statement else "",
         f"Produit: {product_description}" if product_description else "",
         f"Audience cible: {target_audience}" if target_audience else "",
+        f"URL concurrent a analyser: {competitor_url}" if competitor_url else "",
     ]
 
     if memory_context:
@@ -279,6 +281,7 @@ async def execute_agent(
     quality_feedback: str | None = None,
     company_id: str = "",
     company_slug: str = "default",
+    competitor_url: str = "",
 ) -> AgentResult:
     settings = get_settings()
     catalog = MISSION_CATALOG.get(mission_type)
@@ -313,6 +316,7 @@ async def execute_agent(
         product_description, target_audience, business_type, output_format,
         chain_context=chain_context,
         memory_context=memory_context,
+        competitor_url=competitor_url,
     )
 
     if quality_feedback:

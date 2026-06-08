@@ -16,6 +16,7 @@ struct MissionJournalView: View {
                         activityFeedTab.tag(0)
                         documentsTab.tag(1)
                         statsTab.tag(2)
+                        queueTab.tag(3)
                     }
                     .tabViewStyle(.page(indexDisplayMode: .never))
                 }
@@ -50,24 +51,36 @@ struct MissionJournalView: View {
             tabButton("ACTIVITE", index: 0)
             tabButton("DOCS", index: 1)
             tabButton("STATS", index: 2)
+            tabButton("FILE", index: 3, badgeCount: appState.taskQueue.count)
         }
         .background(PixelTheme.bgMedium)
     }
 
-    private func tabButton(_ title: String, index: Int) -> some View {
+    private func tabButton(_ title: String, index: Int, badgeCount: Int = 0) -> some View {
         Button(action: { withAnimation(.easeOut(duration: 0.2)) { selectedTab = index } }) {
-            Text(title)
-                .font(PixelTheme.microFont)
-                .foregroundStyle(selectedTab == index ? PixelTheme.accent : PixelTheme.textSecondary)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-                .overlay(alignment: .bottom) {
-                    if selectedTab == index {
-                        Rectangle()
-                            .fill(PixelTheme.accent)
-                            .frame(height: 2)
+            ZStack(alignment: .topTrailing) {
+                Text(title)
+                    .font(PixelTheme.microFont)
+                    .foregroundStyle(selectedTab == index ? PixelTheme.accent : PixelTheme.textSecondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .overlay(alignment: .bottom) {
+                        if selectedTab == index {
+                            Rectangle()
+                                .fill(PixelTheme.accent)
+                                .frame(height: 2)
+                        }
                     }
+                if badgeCount > 0 {
+                    Text("\(badgeCount)")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(PixelTheme.bgDark)
+                        .padding(2)
+                        .background(PixelTheme.accentRed)
+                        .clipShape(Circle())
+                        .offset(x: 10, y: 2)
                 }
+            }
         }
     }
 
@@ -499,5 +512,17 @@ struct MissionJournalView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 40)
+    }
+
+    // MARK: - Task Queue Tab
+
+    private var queueTab: some View {
+        Group {
+            if let companyId = appState.company?.id {
+                TaskQueueView(companyId: companyId)
+            } else {
+                emptyState(text: "Chargement...")
+            }
+        }
     }
 }

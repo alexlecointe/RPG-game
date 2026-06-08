@@ -1,0 +1,27 @@
+---
+description: Chat spécialisé : Stripe (billing, subscriptions, webhooks, checkout, Connect)
+globs:
+  - backend/app/services/billing.py
+  - backend/app/api/v1/billing.py
+  - backend/app/api/v1/webhooks.py
+  - backend/app/core/config.py
+  - ios/RPGAgentCompany/Views/Billing/PaywallView.swift
+alwaysApply: false
+---
+# Chat : Stripe / Billing
+
+## Périmètre
+- Plans d'abonnement (starter → max)
+- Credit packs (pack_3 → pack_150)
+- Webhooks Stripe (invoice.paid, customer.subscription.*)
+- Stripe Connect (paiements vendeurs)
+- PaywallView iOS
+
+## Plans actuels
+starter $19 15cr | growth $29 25cr | pro $49 50cr | scale $99 100cr | power $199 200cr | ultra $499 500cr | max $999 1000cr
+
+## Exclure du contexte
+- `web/`, Meta Ads, Task Queue
+
+## Réponses
+Courtes. Pas de récap. Edits directs.

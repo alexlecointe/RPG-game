@@ -43,7 +43,36 @@ async def lifespan(_app: FastAPI):
         await sync_shop_catalog()
     except Exception as _exc:
         _log.warning("startup_catalog_failed", error=str(_exc))
+    # Resume any active God Mode sessions that were interrupted by a restart
+    try:
+        await _resume_god_mode_on_startup()
+    except Exception as _exc:
+        _log.warning("startup_god_mode_resume_failed", error=str(_exc))
     yield
+
+
+async def _resume_god_mode_on_startup() -> None:
+    """Re-enqueue God Mode loops for all active sessions on server startup."""
+    import structlog as _sl
+    from datetime import datetime, timezone
+    from sqlalchemy import select
+    from app.core.database import SessionLocal
+    from app.models.entities import GodModeSession
+    from app.workers.runner import schedule_god_mode_loop
+
+    _log = _sl.get_logger()
+    async with SessionLocal() as db:
+        now = datetime.now(timezone.utc)
+        result = await db.execute(
+            select(GodModeSession).where(
+                GodModeSession.status == "active",
+                GodModeSession.expires_at > now,
+            )
+        )
+        sessions = result.scalars().all()
+        for s in sessions:
+            schedule_god_mode_loop(s.company_id, s.id)
+            _log.info("god_mode_resumed_on_startup", company_id=s.company_id, session_id=s.id)
 
 
 app = FastAPI(

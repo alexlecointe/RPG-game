@@ -25,12 +25,16 @@ TOOL_CALL_LIMITS: dict[str, int] = {
     "google_trends": 5,
     "query_learnings": 5,
     "browser_action": 5,
+    "create_task": 3,
 }
 
 READONLY_TOOLS = frozenset({
     "web_search", "web_scrape", "google_trends",
     "query_learnings", "browser_action", "company_assets",
 })
+
+# Tools available to all agent types (injected per-mission with company context)
+UNIVERSAL_TOOLS = frozenset({"create_task"})
 
 
 @dataclass
@@ -67,27 +71,38 @@ class ToolCallRecord:
     result: str
 
 
+def _with_create_task(tools: list[str]) -> list[str]:
+    """Append create_task to a tool list if not already present."""
+    return tools + ["create_task"] if "create_task" not in tools else tools
+
+
 MISSION_TOOLS: dict[str, list[str]] = {
-    "market_scan": ["web_search", "web_scrape", "google_trends", "query_learnings", "store_asset", "company_assets"],
-    "product_brief": ["web_search", "query_learnings", "store_asset", "company_assets"],
-    "supplier_sourcing": ["web_search", "web_scrape", "query_learnings", "store_asset", "company_assets"],
-    "brand_design": ["web_search", "generate_image", "store_asset", "company_assets"],
-    "landing_page": ["web_search", "web_scrape", "deploy_site", "generate_image", "browser_action", "send_email", "infra_action", "store_asset", "company_assets"],
-    "payment_setup": ["web_search", "stripe_action", "store_asset", "company_assets"],
-    "competitor_ads_analysis": ["web_search", "web_scrape", "browser_action", "google_trends", "query_learnings", "store_asset", "company_assets"],
-    "ad_copy_pack": ["web_search", "generate_image", "store_asset", "company_assets"],
-    "ad_creation": ["web_search", "generate_image", "generate_video", "store_asset", "company_assets", "meta_ads_action"],
-    "analytics_tracking": ["web_search", "store_asset", "company_assets"],
-    "optimization_audit": ["web_search", "web_scrape", "browser_action", "query_learnings", "store_asset", "company_assets"],
-    "aso_optimization": ["web_search", "google_trends", "query_learnings", "store_asset", "company_assets"],
-    "organic_content_strategy": ["web_search", "google_trends", "query_learnings", "store_asset", "company_assets", "x_action"],
-    "community_building": ["web_search", "store_asset", "company_assets"],
-    "growth_loop": ["web_search", "google_trends", "query_learnings", "store_asset", "company_assets"],
-    "content_seo": ["web_search", "google_trends", "query_learnings", "store_asset", "company_assets"],
-    "cold_outbound": ["web_search", "send_email", "store_asset", "company_assets"],
-    "prospect_report": ["web_search", "web_scrape", "query_learnings", "store_asset", "company_assets"],
-    "ads_launch_plan": ["web_search", "web_scrape", "google_trends", "store_asset", "company_assets", "meta_ads_action"],
-    "support_setup": ["web_search", "store_asset", "company_assets"],
+    "market_scan": _with_create_task(["web_search", "web_scrape", "google_trends", "query_learnings", "store_asset", "company_assets"]),
+    "product_brief": _with_create_task(["web_search", "query_learnings", "store_asset", "company_assets"]),
+    "supplier_sourcing": _with_create_task(["web_search", "web_scrape", "query_learnings", "store_asset", "company_assets"]),
+    "brand_design": _with_create_task(["web_search", "generate_image", "store_asset", "company_assets"]),
+    "landing_page": _with_create_task(["web_search", "web_scrape", "deploy_site", "generate_image", "browser_action", "send_email", "infra_action", "store_asset", "company_assets"]),
+    "payment_setup": _with_create_task(["web_search", "stripe_action", "store_asset", "company_assets"]),
+    "competitor_ads_analysis": _with_create_task(["web_search", "web_scrape", "browser_action", "google_trends", "query_learnings", "store_asset", "company_assets"]),
+    "ad_copy_pack": _with_create_task(["web_search", "generate_image", "store_asset", "company_assets"]),
+    "ad_creation": _with_create_task(["web_search", "generate_image", "generate_video", "store_asset", "company_assets", "meta_ads_action"]),
+    "analytics_tracking": _with_create_task(["web_search", "store_asset", "company_assets"]),
+    "optimization_audit": _with_create_task(["web_search", "web_scrape", "browser_action", "query_learnings", "store_asset", "company_assets"]),
+    "aso_optimization": _with_create_task(["web_search", "google_trends", "query_learnings", "store_asset", "company_assets"]),
+    "organic_content_strategy": _with_create_task(["web_search", "google_trends", "query_learnings", "store_asset", "company_assets", "x_action"]),
+    "community_building": _with_create_task(["web_search", "store_asset", "company_assets"]),
+    "growth_loop": _with_create_task(["web_search", "google_trends", "query_learnings", "store_asset", "company_assets"]),
+    "content_seo": _with_create_task(["web_search", "google_trends", "query_learnings", "store_asset", "company_assets"]),
+    "cold_outbound": _with_create_task(["web_search", "send_email", "store_asset", "company_assets"]),
+    "prospect_report": _with_create_task(["web_search", "web_scrape", "query_learnings", "store_asset", "company_assets"]),
+    "ads_launch_plan": _with_create_task(["web_search", "web_scrape", "google_trends", "store_asset", "company_assets", "meta_ads_action"]),
+    "support_setup": _with_create_task(["web_search", "store_asset", "company_assets"]),
+    # Freeform tasks have all base tools + create_task
+    "ceo_next_move": _with_create_task(["web_search", "query_learnings", "company_assets"]),
+    "cold_email_sequence": _with_create_task(["web_search", "query_learnings", "store_asset", "company_assets"]),
+    "inbox_review": _with_create_task(["query_learnings", "store_asset", "company_assets"]),
+    "revenue_report": _with_create_task(["query_learnings", "store_asset", "company_assets"]),
+    "blog_article": _with_create_task(["web_search", "query_learnings", "store_asset", "company_assets"]),
 }
 
 
@@ -226,7 +241,13 @@ def get_company_tool_registry(
     from app.agents.tools.deploy_site import create_deploy_site_tool
     registry.register(create_deploy_site_tool(company_slug=company_slug))
 
+    # create_task: allows agents to generate sub-tasks (source=agent_generated)
+    from app.agents.tools.create_task import create_create_task_tool
+    registry.register(create_create_task_tool(company_id=company_id))
+
     if settings.replicate_api_token:
+        from app.agents.tools.generate_image import create_generate_image_tool
+        registry.register(create_generate_image_tool(settings.replicate_api_token, company_id=company_id))
         from app.agents.tools.generate_video import create_generate_video_tool
         registry.register(create_generate_video_tool(company_id=company_id, company_slug=company_slug))
 

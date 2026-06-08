@@ -16,6 +16,7 @@ from app.models.entities import (
     NotificationType,
     QuestStep,
     QuestStepStatus,
+    TaskSource,
 )
 from app.services.quest_chain import get_dependency_graph
 
@@ -124,7 +125,12 @@ class OrchestratorService:
     async def _generate_ceo_next_move(
         self, company: Company, completed_step_title: str
     ) -> None:
-        """Call OrchestratorAgent LLM with company context + last deliverable to produce next move."""
+        """Call OrchestratorAgent LLM to produce next move and CREATE a ceo_proposal task.
+
+        Polsia model: CEO next move = task in queue (source=ceo_proposal), not just a notification.
+        The LLM response is parsed to extract title + description for the queued task.
+        A CompanyNotification is still created for the in-app feed.
+        """
         try:
             from app.agents.executor import execute_agent
             from app.core.database import SessionLocal
@@ -143,8 +149,8 @@ class OrchestratorService:
                 )
                 last_mission = result.scalar_one_or_none()
                 deliverable_excerpt = ""
-                if last_mission and last_mission.result:
-                    deliverable_excerpt = last_mission.result[:1500]
+                if last_mission and last_mission.deliverable:
+                    deliverable_excerpt = last_mission.deliverable[:1500]
 
                 # Fetch quest chain progress summary
                 chain_result = await db.execute(
@@ -161,11 +167,16 @@ class OrchestratorService:
                     + (f" | Disponibles : " + ", ".join(s.title for s in available) if available else "")
                 )
 
-                # Build a rich mission statement for the CEO prompt
+                # CEO prompt: ask for a structured next move with task title + description
                 ceo_mission_statement = (
                     f'Etape venant d\'etre completee : "{completed_step_title}". '
                     f"{chain_summary}. "
-                    f"Livrable produit :\n{deliverable_excerpt}"
+                    f"Livrable produit :\n{deliverable_excerpt}\n\n"
+                    f"Reponds en JSON avec ces 3 cles : "
+                    f'{{"task_title": "titre court de la prochaine tache (<= 60 chars)", '
+                    f'"task_description": "description precise de ce que lagent doit faire (<= 300 chars)", '
+                    f'"task_agent": "un de : builder/marketer/researcher/orchestrator/outreach/support/finance/content/browser/data/ops/growth", '
+                    f'"summary": "explication strategique courte (2-3 phrases) pourquoi cette tache"}}'
                 )
 
                 agent_result = await execute_agent(
@@ -180,11 +191,69 @@ class OrchestratorService:
                     company_slug=company.slug or "default",
                 )
 
+                # Parse JSON to extract task title + description
+                import json as _json
+                import re as _re
+                task_title = f"Prochain move : {completed_step_title}"
+                task_description = agent_result.content[:300]
+                task_agent_str = None
+                summary_text = agent_result.content[:500]
+
+                try:
+                    raw = agent_result.content.strip()
+                    if "```" in raw:
+                        raw = raw.split("```")[1].replace("json", "").strip()
+                    parsed = _json.loads(raw)
+                    task_title = parsed.get("task_title", task_title)[:60]
+                    task_description = parsed.get("task_description", task_description)[:300]
+                    task_agent_str = parsed.get("task_agent")
+                    summary_text = parsed.get("summary", summary_text)[:500]
+                except Exception:
+                    # LLM didn't return valid JSON — extract title from first line
+                    first_line = agent_result.content.strip().split("\n")[0][:60]
+                    if first_line:
+                        task_title = first_line
+                    summary_text = agent_result.content[:500]
+
+                # Dedup: skip if a ceo_proposal is already pending in queue
+                from app.models.entities import Mission as _M, MissionStatus as _MS
+                existing_proposal = await db.execute(
+                    select(_M).where(
+                        _M.company_id == company.id,
+                        _M.source == TaskSource.CEO_PROPOSAL,
+                        _M.status == _MS.PENDING,
+                    ).limit(1)
+                )
+                if existing_proposal.scalar_one_or_none():
+                    logger.info("ceo_proposal_skipped_already_pending", company_id=company.id)
+                else:
+                    # Create the ceo_proposal task in the queue (Polsia model)
+                    from app.services.mission import MissionService
+                    mission_svc = MissionService(db)
+                    try:
+                        await mission_svc.create_freeform_task(
+                            company_id=company.id,
+                            title=task_title,
+                            description=task_description,
+                            agent_type_str=task_agent_str,
+                            source=TaskSource.CEO_PROPOSAL,
+                            auto_schedule=False,
+                        )
+                        logger.info(
+                            "ceo_proposal_task_created",
+                            company_id=company.id,
+                            task_title=task_title,
+                        )
+                    except ValueError:
+                        # no_credits or company not found — skip task creation, still notify
+                        logger.info("ceo_proposal_skipped_no_credits", company_id=company.id)
+
+                # Still create notification for the in-app activity feed
                 db.add(CompanyNotification(
                     company_id=company.id,
                     type=NotificationType.CEO_NEXT_MOVE,
                     title=f"CEO · Prochain move après « {completed_step_title} »",
-                    message=agent_result.content[:2000],
+                    message=summary_text,
                 ))
                 await db.commit()
                 logger.info("ceo_next_move_generated", company_id=company.id, step=completed_step_title)

@@ -95,16 +95,82 @@ async def _execute_generate_image(
     })
 
 
-def create_generate_image_tool(api_token: str) -> ToolDefinition:
+def create_generate_image_tool(api_token: str, company_id: str = "") -> ToolDefinition:
     async def execute(prompt: str, width: int = 1024, height: int = 1024) -> str:
-        return await _execute_generate_image(api_token, prompt, width, height)
+        import structlog as _slog
+        _log = _slog.get_logger()
+
+        # Pre-debit 1 credit before calling Replicate (Polsia: block if no credits)
+        debited = False
+        if company_id:
+            try:
+                from app.core.database import SessionLocal
+                from app.services.billing import debit_credit, get_or_create_subscription
+                from app.services.company import CompanyService
+                async with SessionLocal() as db:
+                    company_svc = CompanyService(db)
+                    company = await company_svc.get_company(company_id)
+                    if company:
+                        sub = await get_or_create_subscription(db, company)
+                        await debit_credit(db, sub)
+                        await db.commit()
+                        debited = True
+                        _log.info("image_credit_pre_debited", company_id=company_id)
+            except ValueError:
+                return json.dumps({"error": "no_credits_for_image", "message": "Plus de crédits pour générer une image."})
+            except Exception as exc:
+                _log.warning("image_credit_pre_debit_error", company_id=company_id, error=str(exc))
+
+        try:
+            result_json = await _execute_generate_image(api_token, prompt, width, height)
+        except Exception as exc:
+            # Generation failed — refund the pre-debited credit
+            if debited and company_id:
+                try:
+                    from app.core.database import SessionLocal
+                    from app.services.billing import get_or_create_subscription
+                    from app.services.company import CompanyService
+                    async with SessionLocal() as db:
+                        company_svc = CompanyService(db)
+                        company = await company_svc.get_company(company_id)
+                        if company:
+                            sub = await get_or_create_subscription(db, company)
+                            sub.pack_credits = (sub.pack_credits or 0) + 1
+                            await db.commit()
+                            _log.info("image_credit_refunded", company_id=company_id)
+                except Exception:
+                    pass
+            raise
+
+        # Check Replicate returned an error payload — refund if so
+        if debited and company_id:
+            import json as _json
+            parsed = _json.loads(result_json) if result_json else {}
+            if parsed.get("error") and not parsed.get("generated"):
+                try:
+                    from app.core.database import SessionLocal
+                    from app.services.billing import get_or_create_subscription
+                    from app.services.company import CompanyService
+                    async with SessionLocal() as db:
+                        company_svc = CompanyService(db)
+                        company = await company_svc.get_company(company_id)
+                        if company:
+                            sub = await get_or_create_subscription(db, company)
+                            sub.pack_credits = (sub.pack_credits or 0) + 1
+                            await db.commit()
+                            _log.info("image_credit_refunded_no_output", company_id=company_id)
+                except Exception:
+                    pass
+
+        return result_json
 
     return ToolDefinition(
         name="generate_image",
         description=(
             "Generate an AI image from a text description using Replicate (flux-schnell). "
             "Use this to create product photos, ad creatives, logos, hero images, etc. "
-            "Returns the URL of the generated image."
+            "Returns the URL of the generated image. "
+            "Cost: 1 credit per image generated."
         ),
         parameters=GENERATE_IMAGE_SCHEMA,
         execute=execute,

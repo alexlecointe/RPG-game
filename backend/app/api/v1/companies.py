@@ -46,6 +46,7 @@ async def _company_out(company, wallet) -> CompanyOut:
         stripe_connect_status=stripe_status,
         daily_ads_budget_cents=company.daily_ads_budget_cents or 0,
         ads_wallet_balance_cents=company.ads_wallet_balance_cents or 0,
+        auto_pilot=company.auto_pilot or False,
         wallet=WalletOut(
             credits_balance=wallet.credits_balance,
             credits_cap=settings.credits_cap,

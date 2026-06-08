@@ -1,0 +1,28 @@
+---
+description: Chat spécialisé : UI/UX iOS — design pixel art RPG, SwiftUI, SpriteKit, PixelTheme
+globs:
+  - ios/RPGAgentCompany/Theme/PixelTheme.swift
+  - ios/RPGAgentCompany/Game/GameScene.swift
+  - ios/RPGAgentCompany/Game/VillageMap.swift
+  - ios/RPGAgentCompany/Views/**/*.swift
+alwaysApply: false
+---
+# Chat : UI/UX iOS
+
+## Stack
+SwiftUI + SpriteKit, iOS 17+, pixel art RPG
+
+## Design system : PixelTheme
+- Couleurs : accent (gold), accentGreen, accentRed, accentBlue, accentPurple, bgDark, bgMedium, bgLight
+- Fonts : titleFont, headlineFont, bodyFont, captionFont, microFont
+- Composants : PixelButtonStyle, pixelCard(), PixelProgressBar
+
+## Inspiration
+Polsia.com — UI minimaliste, typographie bold, contraste élevé
+
+## Exclure du contexte
+- `web/`, `backend/`, `backend/.venv/`
+- Fichiers PNG/assets
+
+## Réponses
+Courtes. Edits directs. Montre le résultat visuel si possible.

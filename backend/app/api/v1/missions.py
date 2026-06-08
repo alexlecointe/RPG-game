@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlalchemy import select
 
 from app.api.deps import DbSession, verify_api_key
 from app.agents.mission_catalog import MISSION_CATALOG, get_suggested_split
-from app.models.entities import Mission, MissionLog, MissionStatus
+from app.models.entities import Mission, MissionLog, MissionStatus, TaskSource
 from app.schemas.api import (
     ActivityFeedOut, MissionCreate, MissionLogOut, MissionOut,
     MissionPreviewOut, MissionSplitItem, RecurringMissionCreate, RecurringMissionOut,
@@ -17,6 +19,29 @@ from app.schemas.api import (
 from app.services.mission import MissionService
 
 router = APIRouter(dependencies=[Depends(verify_api_key)])
+
+
+# ---------------------------------------------------------------------------
+# Pydantic bodies for new queue endpoints
+# ---------------------------------------------------------------------------
+
+class RejectBody(BaseModel):
+    reason: str = "user_cancelled"
+
+
+class ReorderBody(BaseModel):
+    position: int
+
+
+class EditTaskBody(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+
+
+class FreeformTaskBody(BaseModel):
+    title: str
+    description: str = ""
+    agent_type: Optional[str] = None
 
 
 @router.get("/companies/{company_id}/missions", response_model=list[MissionOut])
@@ -32,16 +57,17 @@ async def preview_mission(company_id: str, mission_type: str, db: DbSession):
     if not catalog:
         raise HTTPException(400, detail="unknown_mission_type")
 
+    from app.services.billing import get_subscription_status
     from app.services.company import CompanyService
-    from app.services.wallet import WalletService
 
     company_svc = CompanyService(db)
     company = await company_svc.get_company(company_id)
-    if not company or not company.wallet:
+    if not company:
         raise HTTPException(404, detail="company_not_found")
 
-    wallet_svc = WalletService(db)
-    wallet = await wallet_svc.apply_daily_regen(company.wallet)
+    sub_status = await get_subscription_status(db, company_id)
+    total_credits = sub_status.get("total_credits", 0)
+    effective_cost = 1 if catalog.credits_cost > 0 else 0
 
     split = get_suggested_split(mission_type)
 
@@ -49,9 +75,9 @@ async def preview_mission(company_id: str, mission_type: str, db: DbSession):
         mission_type=catalog.mission_type,
         title=catalog.title,
         description=catalog.description,
-        credits_cost=catalog.credits_cost,
-        credits_remaining=wallet.credits_balance,
-        can_afford=wallet.credits_balance >= catalog.credits_cost,
+        credits_cost=effective_cost,
+        credits_remaining=total_credits,
+        can_afford=total_credits >= effective_cost,
         estimated_minutes=catalog.estimated_minutes,
         complexity=catalog.complexity,
         max_images=catalog.max_images,
@@ -296,3 +322,119 @@ async def delete_recurring_mission(recurring_id: str, db: DbSession):
     rm.is_active = False
     await db.commit()
     return {"status": "deactivated", "id": recurring_id}
+
+
+# ---------------------------------------------------------------------------
+# Polsia Task Queue Management
+# ---------------------------------------------------------------------------
+
+@router.get("/companies/{company_id}/tasks/queue", response_model=list[MissionOut])
+async def get_task_queue(company_id: str, db: DbSession):
+    """Return all PENDING tasks ordered by queue_order (Polsia task queue)."""
+    svc = MissionService(db)
+    return await svc.get_task_queue(company_id)
+
+
+@router.post("/companies/{company_id}/tasks", response_model=MissionOut)
+async def create_freeform_task(company_id: str, body: FreeformTaskBody, db: DbSession):
+    """Create a freeform task with auto agent routing (Polsia model)."""
+    svc = MissionService(db)
+    try:
+        return await svc.create_freeform_task(
+            company_id=company_id,
+            title=body.title,
+            description=body.description,
+            agent_type_str=body.agent_type,
+            source=TaskSource.USER,
+        )
+    except ValueError as e:
+        code = str(e)
+        if code == "no_credits":
+            raise HTTPException(402, detail="no_credits")
+        raise HTTPException(400, detail=code) from e
+
+
+@router.post("/missions/{mission_id}/reject", response_model=MissionOut)
+async def reject_task(mission_id: str, body: RejectBody, db: DbSession):
+    """Reject (cancel) a PENDING task. Refunds the credit."""
+    # Resolve company_id from mission
+    result = await db.execute(select(Mission).where(Mission.id == mission_id))
+    mission = result.scalar_one_or_none()
+    if not mission:
+        raise HTTPException(404, detail="mission_not_found")
+    svc = MissionService(db)
+    try:
+        return await svc.reject_task(mission_id, mission.company_id, body.reason)
+    except ValueError as e:
+        raise HTTPException(400, detail=str(e)) from e
+
+
+@router.post("/missions/{mission_id}/move-to-top", response_model=MissionOut)
+async def move_task_to_top(mission_id: str, db: DbSession):
+    """Move a PENDING task to position 1 in the queue."""
+    result = await db.execute(select(Mission).where(Mission.id == mission_id))
+    mission = result.scalar_one_or_none()
+    if not mission:
+        raise HTTPException(404, detail="mission_not_found")
+    svc = MissionService(db)
+    try:
+        return await svc.move_to_top(mission_id, mission.company_id)
+    except ValueError as e:
+        raise HTTPException(400, detail=str(e)) from e
+
+
+@router.patch("/missions/{mission_id}/order", response_model=MissionOut)
+async def reorder_task(mission_id: str, body: ReorderBody, db: DbSession):
+    """Move a PENDING task to a specific position in the queue."""
+    result = await db.execute(select(Mission).where(Mission.id == mission_id))
+    mission = result.scalar_one_or_none()
+    if not mission:
+        raise HTTPException(404, detail="mission_not_found")
+    svc = MissionService(db)
+    try:
+        return await svc.reorder_task(mission_id, mission.company_id, body.position)
+    except ValueError as e:
+        raise HTTPException(400, detail=str(e)) from e
+
+
+@router.patch("/missions/{mission_id}", response_model=MissionOut)
+async def edit_task(mission_id: str, body: EditTaskBody, db: DbSession):
+    """Edit the title or description of a PENDING task."""
+    result = await db.execute(select(Mission).where(Mission.id == mission_id))
+    mission = result.scalar_one_or_none()
+    if not mission:
+        raise HTTPException(404, detail="mission_not_found")
+    svc = MissionService(db)
+    try:
+        return await svc.edit_task(mission_id, mission.company_id, body.title, body.description)
+    except ValueError as e:
+        raise HTTPException(400, detail=str(e)) from e
+
+
+@router.get("/companies/{company_id}/tasks/route")
+async def route_task(company_id: str, title: str, description: str = ""):
+    """Suggest the best agent for a given task title/description."""
+    from app.services.task_router import find_best_agent
+    agent = find_best_agent(title, description)
+    return {"recommended_agent": agent.value, "confidence": 0.85}
+
+
+@router.post("/missions/{mission_id}/execute", response_model=MissionOut)
+async def execute_task(mission_id: str, db: DbSession):
+    """Manually trigger execution of a PENDING task (Polsia run_link equivalent).
+
+    This is how tasks in queue get executed — the user explicitly clicks 'Lancer'.
+    Credits are debited when the runner starts (not here).
+    """
+    result = await db.execute(select(Mission).where(Mission.id == mission_id))
+    mission = result.scalar_one_or_none()
+    if not mission:
+        raise HTTPException(404, detail="mission_not_found")
+    if mission.status != MissionStatus.PENDING:
+        raise HTTPException(400, detail=f"mission_not_pending (status: {mission.status.value})")
+
+    from app.workers.runner import schedule_mission_run
+    schedule_mission_run(mission.id)
+
+    await db.refresh(mission)
+    return mission

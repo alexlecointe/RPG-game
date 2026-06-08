@@ -84,11 +84,16 @@ async def start_quest_step(company_id: str, step_number: int, db: DbSession):
     except ValueError as e:
         code = str(e)
         status = 400
-        if code == "insufficient_credits":
+        if code in ("insufficient_credits", "no_credits"):
             status = 402
         elif code == "rate_limit_exceeded":
             status = 429
         raise HTTPException(status, detail=code) from e
+
+    # Quest chain steps are CEO-proposed roadmap tasks
+    from app.models.entities import TaskSource
+    mission.source = TaskSource.CEO_PROPOSAL
+    await db.commit()
 
     await chain_svc.mark_step_running(company_id, step_number, mission.id)
     return mission

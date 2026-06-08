@@ -14,9 +14,18 @@ dist/
 build/
 *.egg-info/
 
-# iOS build artifacts
+# iOS build artifacts & Xcode noise
 ios/DerivedData/
 ios/**/xcuserdata/
+ios/**/*.xcodeproj/
+ios/**/*.xcworkspace/
+ios/**/*.xcassets/
+ios/**/Pods/
+ios/**/build/
+
+# Web node_modules
+web/node_modules/
+**/node_modules/
 
 # IDE / system
 .DS_Store

@@ -1,0 +1,25 @@
+---
+description: Chat spécialisé : Meta Ads (campagnes, creatives, pixel, budget, monitoring)
+globs:
+  - backend/app/services/ads.py
+  - backend/app/agents/tools/meta_ads_action.py
+  - backend/app/api/v1/ads.py
+  - backend/app/models/entities.py
+  - ios/RPGAgentCompany/Views/Base/BuildingDetailView.swift
+alwaysApply: false
+---
+# Chat : Meta Ads
+
+## Périmètre
+- Campagnes Meta (création, pause, resume, budget)
+- Creatives / video ads
+- Pixel events tracking
+- Monitoring automatique (celery beat toutes les 4h)
+- Dashboard AdsLiveDashboard iOS
+
+## Exclure du contexte
+- `web/`, `backend/.venv/`
+- Tout ce qui n'est pas ads/marketer
+
+## Réponses
+Courtes. Pas de récap. Edits directs.

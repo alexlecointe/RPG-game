@@ -69,8 +69,19 @@ ios/RPGAgentCompany/
 ## Regles de dev
 
 - Toujours repondre en francais
+- Reponses courtes, pas de recap, edits directs
 - Le backend utilise `create_all` : pas besoin d'Alembic, les nouvelles colonnes sont creees au demarrage
 - Ne JAMAIS modifier les fichiers dans `backend/.venv/`
 - Les prompts systeme des agents sont dans `backend/app/agents/prompts/`
 - Chaque agent type a un building associe (voir BUILDING_NAMES dans quest_chain.py)
 - Le `.cursorignore` exclut venv, .venv, __pycache__ -- ne pas les indexer
+
+## Chats specialises (ne charger que les regles du chat actif)
+- `chat-tasks.mdc` : queue, CEO proposals, billing credits, recurring missions
+- `chat-meta-ads.mdc` : Meta Ads, creatives, monitoring
+- `chat-stripe.mdc` : Stripe, billing, webhooks, PaywallView
+- `chat-ui-ux.mdc` : iOS SwiftUI/SpriteKit, PixelTheme
+
+## Toujours ignorer
+- `web/` (version web non prioritaire)
+- `backend/.venv/`, `__pycache__`, fichiers PNG/assets

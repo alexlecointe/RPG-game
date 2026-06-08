@@ -116,6 +116,47 @@ async def _run_mission_inner(mission_id: str) -> None:
         if not mission:
             return
 
+        # Debit 1 credit at execution start (Polsia model — never at creation)
+        # Skip debit entirely if company has an active God Mode session
+        if mission.credits_cost > 0:
+            from app.services.billing import (
+                debit_credit,
+                get_active_god_mode_session,
+                get_or_create_subscription,
+            )
+            from app.services.company import CompanyService
+            company_svc = CompanyService(db)
+            company_for_billing = await company_svc.get_company(mission.company_id)
+            if company_for_billing:
+                god_session = await get_active_god_mode_session(db, mission.company_id)
+                if god_session:
+                    db.add(MissionLog(
+                        mission_id=mission_id,
+                        step="god_mode_bypass",
+                        message=f"God Mode actif — crédit non débité (expire {god_session.expires_at.strftime('%d/%m %Hh')})",
+                    ))
+                else:
+                    sub = await get_or_create_subscription(db, company_for_billing)
+                    try:
+                        await debit_credit(db, sub)
+                        db.add(MissionLog(
+                            mission_id=mission_id,
+                            step="credit_debited",
+                            message="1 crédit débité au démarrage (Polsia)",
+                        ))
+                    except ValueError:
+                        db.add(MissionLog(
+                            mission_id=mission_id,
+                            step="no_credits",
+                            message="Exécution annulée : plus de crédits",
+                        ))
+                        mission.status = MissionStatus.FAILED
+                        mission.error_message = "no_credits"
+                        mission.completed_at = datetime.now(timezone.utc)
+                        await db.commit()
+                        logger.warning("mission_no_credits", mission_id=mission_id)
+                        return
+
         mission.status = MissionStatus.RUNNING
         mission.started_at = datetime.now(timezone.utc)
         db.add(MissionLog(mission_id=mission_id, step="agent_started", message="Agent en route..."))
@@ -189,6 +230,7 @@ async def _run_mission_inner(mission_id: str) -> None:
                     quality_feedback=feedback_addendum or None,
                     company_id=company.id,
                     company_slug=company.slug or "default",
+                    competitor_url=company.competitor_url or "",
                 )
                 if agent_result.tool_calls and log_step:
                     for tc in agent_result.tool_calls:
@@ -259,47 +301,42 @@ async def _run_mission_inner(mission_id: str) -> None:
 
             if mission.mission_type == "landing_page" and agent_result.content:
                 from app.services.site_deploy import build_site_url, deploy_landing_html
+                import json as _json
 
-                deploy_result = await deploy_landing_html(
-                    company.slug or company.name,
-                    agent_result.content,
-                    company.slug or "site",
-                    company.render_service_id,
+                # Skip runner-side deploy if the agent already called deploy_site successfully
+                agent_already_deployed = any(
+                    tc.get("tool") == "deploy_site"
+                    and _json.loads(tc.get("result", "{}") or "{}").get("deployed")
+                    for tc in (agent_result.tool_calls or [])
                 )
-                site_url = deploy_result.get("site_url") or build_site_url(
-                    company.slug or "", company.render_url
-                )
+
+                if agent_already_deployed:
+                    site_url = build_site_url(company.slug or "", company.render_url)
+                    if log_step:
+                        await log_step("site_deployed", f"Site deploye par l'agent : {site_url or 'en cours'}")
+                else:
+                    deploy_result = await deploy_landing_html(
+                        company.slug or company.name,
+                        agent_result.content,
+                        company.slug or "site",
+                        company.render_service_id,
+                    )
+                    site_url = deploy_result.get("site_url") or build_site_url(
+                        company.slug or "", company.render_url
+                    )
+                    if log_step:
+                        await log_step("site_deployed", f"Site deploye : {site_url or 'en cours'}")
+
                 if site_url:
                     deliverable_content = (
                         f"{agent_result.content}\n\n---\n\n"
                         f"**Site live :** {site_url}\n"
                     )
-                    if log_step:
-                        await log_step("site_deployed", f"Site deploye : {site_url}")
 
             if mission.mission_type == "ads_launch_plan":
-                from sqlalchemy import select as sa_select
-
-                from app.models.entities import CompanyAsset
-                from app.services.ads import launch_meta_campaign
-
-                assets_result = await db.execute(
-                    sa_select(CompanyAsset).where(
-                        CompanyAsset.company_id == company.id,
-                        CompanyAsset.asset_type == "video",
-                    ).limit(3)
-                )
-                videos = [a.public_url for a in assets_result.scalars().all() if a.public_url]
-                if videos and company.daily_ads_budget_cents > 0:
-                    try:
-                        await launch_meta_campaign(
-                            db, company, f"{company.name} Ads",
-                            company.daily_ads_budget_cents, videos, [], [],
-                        )
-                        if log_step:
-                            await log_step("ads_launched", f"Campagne Meta lancee ({len(videos)} videos)")
-                    except Exception as ads_exc:
-                        logger.warning("ads_launch_failed", error=str(ads_exc))
+                # The LLM calls meta_ads_action directly to create campaigns.
+                # We parse the deliverable to extract Meta campaign IDs and persist them in DB.
+                await _persist_ads_from_deliverable(db, company, deliverable_content, log_step)
 
             svc = MissionService(db)
             await db.refresh(mission)
@@ -348,3 +385,230 @@ async def _run_mission_inner(mission_id: str) -> None:
 
             orch = OrchestratorService(db)
             await orch.handle_step_failure(company.id, mission.mission_type)
+
+            # Polsia retry loop: CEO proposes a new retry task after failure
+            await _propose_retry_task(db, mission, company, str(exc))
+
+
+async def _propose_retry_task(db, mission, company, error: str) -> None:
+    """Polsia retry loop: after task failure, CEO auto-creates a new ceo_proposal retry task.
+
+    The retry task sits in queue (no auto-execute) — user must manually trigger it.
+    Only creates a retry if: not already a retry (avoid infinite loops) and not no_credits.
+    """
+    if error == "no_credits":
+        return  # No point retrying without credits
+
+    # Avoid cascading retries: don't retry a retry more than twice
+    from sqlalchemy import select as _select
+    from app.models.entities import Mission as _Mission, MissionStatus as _MS, TaskSource as _TS
+
+    # Dedup: if a retry for this agent_type is already pending in queue, skip
+    pending_result = await db.execute(
+        _select(_Mission).where(
+            _Mission.company_id == mission.company_id,
+            _Mission.agent_type == mission.agent_type,
+            _Mission.source == _TS.CEO_PROPOSAL,
+            _Mission.status == _MS.PENDING,
+        )
+    )
+    if list(pending_result.scalars().all()):
+        logger.info(
+            "retry_already_pending_skipping",
+            mission_id=mission.id,
+            mission_type=mission.mission_type,
+        )
+        return
+
+    retry_count_result = await db.execute(
+        _select(_Mission).where(
+            _Mission.company_id == mission.company_id,
+            _Mission.agent_type == mission.agent_type,
+            _Mission.source == _TS.CEO_PROPOSAL,
+            _Mission.status == _MS.FAILED,
+        )
+    )
+    previous_retries = list(retry_count_result.scalars().all())
+    if len(previous_retries) >= 2:
+        # Too many retries for same agent type — don't add more
+        logger.info(
+            "retry_limit_reached",
+            mission_id=mission.id,
+            mission_type=mission.mission_type,
+            retries=len(previous_retries),
+        )
+        return
+
+    try:
+        from app.services.mission import MissionService
+        from app.services.task_router import find_best_agent
+
+        svc = MissionService(db)
+
+        display_title = mission.title or mission.mission_type.replace("_", " ").title()
+        retry_number = len(previous_retries) + 1
+        retry_title = f"Retry #{retry_number} — {display_title}"
+        retry_description = (
+            f"Relance de la tâche '{display_title}' après échec.\n"
+            f"Erreur précédente : {error[:200]}\n"
+            f"Approche différente recommandée."
+        )
+
+        await svc.create_freeform_task(
+            company_id=mission.company_id,
+            title=retry_title,
+            description=retry_description,
+            agent_type_str=mission.agent_type.value,
+            source=_TS.CEO_PROPOSAL,
+            auto_schedule=False,
+        )
+
+        logger.info(
+            "retry_task_created",
+            original_mission_id=mission.id,
+            mission_type=mission.mission_type,
+            retry_number=retry_number,
+        )
+    except ValueError:
+        # no_credits during retry creation — skip silently
+        pass
+    except Exception as exc:
+        logger.warning("retry_task_creation_failed", error=str(exc))
+
+
+async def _persist_ads_from_deliverable(db, company, deliverable_content: str, log_step) -> None:
+    """Parse deliverable for Meta campaign IDs created by LLM and persist to DB."""
+    import re
+
+    from app.models.entities import AdCampaign, AdCampaignStatus
+
+    # Look for campaign_id patterns in the deliverable JSON
+    campaign_ids = re.findall(r'"campaign_id"\s*:\s*"(\d+)"', deliverable_content or "")
+    if not campaign_ids:
+        # Try alternate formats: "id": "12345..."
+        campaign_ids = re.findall(r'(?:meta_campaign_id|campaign_id)["\s:]+(\d{10,})', deliverable_content or "")
+
+    if campaign_ids:
+        for meta_cid in campaign_ids[:3]:
+            existing = await db.execute(
+                __import__("sqlalchemy", fromlist=["select"]).select(AdCampaign).where(
+                    AdCampaign.company_id == company.id,
+                    AdCampaign.meta_campaign_id == meta_cid,
+                )
+            )
+            if not existing.scalars().first():
+                camp = AdCampaign(
+                    company_id=company.id,
+                    name=f"{company.name} Ads",
+                    meta_campaign_id=meta_cid,
+                    daily_budget_cents=company.daily_ads_budget_cents or 1000,
+                    status=AdCampaignStatus.ACTIVE,
+                )
+                db.add(camp)
+        await db.commit()
+        if log_step:
+            await log_step("ads_persisted", f"{len(campaign_ids)} campagne(s) Meta enregistree(s)")
+
+
+# ---------------------------------------------------------------------------
+# God Mode autonomous loop — runs while GodModeSession is active
+# ---------------------------------------------------------------------------
+
+# Sequence of missions the God Mode loop chains automatically (Builder → Marketer → Finance)
+_GOD_MODE_SEQUENCE = [
+    "landing_page",
+    "ad_copy_pack",
+    "payment_setup",
+    "market_research",
+    "ad_creation",
+]
+
+# Interval between automatic mission launches (minutes)
+_GOD_MODE_INTERVAL_MINUTES = 12
+
+
+def schedule_god_mode_loop(company_id: str, god_session_id: str) -> None:
+    """Start the God Mode autonomous loop. Uses Celery if available, asyncio otherwise."""
+    from app.core.config import get_settings
+    settings = get_settings()
+
+    if settings.redis_url and settings.app_env != "development":
+        try:
+            from app.workers.celery_app import run_god_mode_step
+            run_god_mode_step.apply_async(args=[company_id, god_session_id, 0], countdown=30)
+            logger.info("god_mode_loop_queued_celery", company_id=company_id, session_id=god_session_id)
+            return
+        except Exception as exc:
+            logger.warning("god_mode_celery_dispatch_failed", error=str(exc))
+
+    # Dev fallback: asyncio task
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_god_mode_loop(company_id, god_session_id))
+        logger.info("god_mode_loop_started_asyncio", company_id=company_id, session_id=god_session_id)
+    except RuntimeError:
+        asyncio.run(_god_mode_loop(company_id, god_session_id))
+
+
+async def _god_mode_loop(company_id: str, god_session_id: str) -> None:
+    """Continuously launch missions until the God Mode session expires."""
+    from datetime import datetime, timezone
+
+    from sqlalchemy import select as _select
+
+    from app.models.entities import Company, GodModeSession
+    from app.services.mission import MissionService
+
+    logger.info("god_mode_loop_begin", company_id=company_id)
+    step_index = 0
+
+    while True:
+        # Check session still active
+        async with SessionLocal() as db:
+            result = await db.execute(
+                _select(GodModeSession).where(GodModeSession.id == god_session_id)
+            )
+            session = result.scalar_one_or_none()
+
+        if not session:
+            logger.warning("god_mode_session_missing", session_id=god_session_id)
+            return
+
+        now = datetime.now(timezone.utc)
+        if session.status != "active" or (session.expires_at and session.expires_at <= now):
+            async with SessionLocal() as db:
+                s2 = await db.get(GodModeSession, god_session_id)
+                if s2 and s2.status == "active":
+                    s2.status = "expired"
+                    await db.commit()
+            logger.info("god_mode_loop_ended", company_id=company_id, reason="expired")
+            return
+
+        # Pick next mission in sequence (cycles through)
+        mission_type = _GOD_MODE_SEQUENCE[step_index % len(_GOD_MODE_SEQUENCE)]
+        step_index += 1
+
+        try:
+            async with SessionLocal() as db:
+                svc = MissionService(db)
+                mission = await svc.start_mission(
+                    company_id=company_id,
+                    mission_type=mission_type,
+                )
+                await db.commit()
+                logger.info(
+                    "god_mode_mission_launched",
+                    company_id=company_id,
+                    mission_id=mission.id,
+                    mission_type=mission_type,
+                )
+        except Exception as exc:
+            logger.warning(
+                "god_mode_mission_failed",
+                company_id=company_id,
+                mission_type=mission_type,
+                error=str(exc),
+            )
+
+        # Wait before next mission
+        await asyncio.sleep(_GOD_MODE_INTERVAL_MINUTES * 60)

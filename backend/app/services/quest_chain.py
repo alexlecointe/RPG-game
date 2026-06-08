@@ -21,7 +21,12 @@ from sqlalchemy.orm import selectinload
 # Quest chain definitions per business type
 # ---------------------------------------------------------------------------
 
-# Polsia-like simplified chain — HQ → Website → Payments → Ads
+# Polsia model — 4 buildings, 5 steps : QG → Site Web → Paiements → Ads (x2)
+# Step 1 : QG (researcher)   — valider le marche
+# Step 2 : Site Web (builder) — lancer le site
+# Step 3 : Paiements (finance) — encaisser
+# Step 4 : Ads (marketer)    — preparer les pubs / acquisition
+# Step 5 : Ads (marketer)    — lancer Meta Ads
 ECOMMERCE_CHAIN: list[dict] = [
     {
         "step": 1,
@@ -34,88 +39,136 @@ ECOMMERCE_CHAIN: list[dict] = [
     },
     {
         "step": 2,
-        "mission_type": "competitor_ads_analysis",
-        "title": "Analyse concurrentielle",
-        "description": "Analyse les top pubs et strategies de tes concurrents.",
-        "agent_type": AgentType.RESEARCHER,
+        "mission_type": "landing_page",
+        "title": "Site web live",
+        "description": "Genere et heberge ta landing page avec hero, produit et CTA.",
+        "agent_type": AgentType.BUILDER,
         "requires": [1],
-        "building": "hq",
+        "building": "website",
     },
     {
         "step": 3,
-        "mission_type": "product_brief",
-        "title": "Brief produit",
-        "description": "Definis ton produit : nom, USP, prix et angle marketing.",
-        "agent_type": AgentType.BUILDER,
-        "requires": [1],
-        "building": "website",
-    },
-    {
-        "step": 4,
-        "mission_type": "brand_design",
-        "title": "Design de marque",
-        "description": "Charte graphique : palette, typo, ton et mood board.",
-        "agent_type": AgentType.CONTENT,
-        "requires": [3],
-        "building": "website",
-    },
-    {
-        "step": 5,
-        "mission_type": "landing_page",
-        "title": "Site web live",
-        "description": "Genere et heberge ta landing page sur ton sous-domaine.",
-        "agent_type": AgentType.BUILDER,
-        "requires": [3, 4],
-        "building": "website",
-    },
-    {
-        "step": 6,
         "mission_type": "payment_setup",
         "title": "Setup paiements",
-        "description": "Configure Stripe Connect pour recevoir tes paiements.",
+        "description": "Configure Stripe Connect pour encaisser tes premiers clients.",
         "agent_type": AgentType.FINANCE,
-        "requires": [5],
+        "requires": [2],
         "building": "payments",
     },
     {
-        "step": 7,
+        "step": 4,
         "mission_type": "ad_creation",
-        "title": "Creation pubs video",
-        "description": "Genere 3 videos ads verticales 9:16 pour Meta.",
+        "title": "Creation des pubs",
+        "description": "3 variantes d'ads Meta : headlines, visuels et CTAs.",
         "agent_type": AgentType.MARKETER,
-        "requires": [5],
+        "requires": [2],
         "building": "ads",
     },
     {
-        "step": 8,
+        "step": 5,
         "mission_type": "ads_launch_plan",
         "title": "Lancement Meta Ads",
-        "description": "Lance les campagnes Meta avec ton budget quotidien.",
+        "description": "Lance les campagnes Meta avec budget, audiences et KPIs.",
         "agent_type": AgentType.MARKETER,
-        "requires": [6, 7],
+        "requires": [3, 4],
         "building": "ads",
     },
 ]
 
 APP_CHAIN: list[dict] = [
-    {"step": 1, "mission_type": "market_scan", "title": "Etude de marche", "description": "Analyse le marche des apps.", "agent_type": AgentType.RESEARCHER, "requires": [], "building": "hq"},
-    {"step": 2, "mission_type": "product_brief", "title": "Brief produit", "description": "Features MVP et specs.", "agent_type": AgentType.BUILDER, "requires": [1], "building": "website"},
-    {"step": 3, "mission_type": "brand_design", "title": "Design de marque", "description": "Charte graphique et icone app.", "agent_type": AgentType.CONTENT, "requires": [2], "building": "website"},
-    {"step": 4, "mission_type": "landing_page", "title": "Site web live", "description": "Landing page hebergee.", "agent_type": AgentType.BUILDER, "requires": [2, 3], "building": "website"},
-    {"step": 5, "mission_type": "payment_setup", "title": "Setup paiements", "description": "Stripe Connect.", "agent_type": AgentType.FINANCE, "requires": [4], "building": "payments"},
-    {"step": 6, "mission_type": "ad_creation", "title": "Creation pubs video", "description": "Videos ads Meta.", "agent_type": AgentType.MARKETER, "requires": [4], "building": "ads"},
-    {"step": 7, "mission_type": "ads_launch_plan", "title": "Lancement Meta Ads", "description": "Campagnes Meta live.", "agent_type": AgentType.MARKETER, "requires": [5, 6], "building": "ads"},
+    {
+        "step": 1,
+        "mission_type": "market_scan",
+        "title": "Etude de marche",
+        "description": "Analyse le marche des apps et valide le besoin.",
+        "agent_type": AgentType.RESEARCHER,
+        "requires": [],
+        "building": "hq",
+    },
+    {
+        "step": 2,
+        "mission_type": "landing_page",
+        "title": "Site web live",
+        "description": "Landing page app avec features, screenshots et CTA telechargement.",
+        "agent_type": AgentType.BUILDER,
+        "requires": [1],
+        "building": "website",
+    },
+    {
+        "step": 3,
+        "mission_type": "payment_setup",
+        "title": "Setup paiements",
+        "description": "Integre Stripe pour les in-app purchases et abonnements.",
+        "agent_type": AgentType.FINANCE,
+        "requires": [2],
+        "building": "payments",
+    },
+    {
+        "step": 4,
+        "mission_type": "aso_optimization",
+        "title": "ASO & fiche store",
+        "description": "Optimise ta fiche App Store : titre, keywords et screenshots.",
+        "agent_type": AgentType.MARKETER,
+        "requires": [2],
+        "building": "ads",
+    },
+    {
+        "step": 5,
+        "mission_type": "ads_launch_plan",
+        "title": "Lancement Meta Ads",
+        "description": "Campagnes Meta ciblant les installers de ton app.",
+        "agent_type": AgentType.MARKETER,
+        "requires": [3, 4],
+        "building": "ads",
+    },
 ]
 
 SAAS_CHAIN: list[dict] = [
-    {"step": 1, "mission_type": "market_scan", "title": "Etude de marche", "description": "Analyse marche SaaS.", "agent_type": AgentType.RESEARCHER, "requires": [], "building": "hq"},
-    {"step": 2, "mission_type": "competitor_ads_analysis", "title": "Analyse concurrentielle", "description": "Concurrents SaaS.", "agent_type": AgentType.RESEARCHER, "requires": [1], "building": "hq"},
-    {"step": 3, "mission_type": "product_brief", "title": "Brief produit / pricing", "description": "Produit et tiers pricing.", "agent_type": AgentType.BUILDER, "requires": [1], "building": "website"},
-    {"step": 4, "mission_type": "brand_design", "title": "Design de marque", "description": "Charte graphique.", "agent_type": AgentType.CONTENT, "requires": [3], "building": "website"},
-    {"step": 5, "mission_type": "landing_page", "title": "Site web live", "description": "Landing hebergee.", "agent_type": AgentType.BUILDER, "requires": [3, 4], "building": "website"},
-    {"step": 6, "mission_type": "payment_setup", "title": "Setup paiements", "description": "Stripe Connect + abonnements.", "agent_type": AgentType.FINANCE, "requires": [5], "building": "payments"},
-    {"step": 7, "mission_type": "ad_creation", "title": "Creation pubs video", "description": "Videos ads Meta.", "agent_type": AgentType.MARKETER, "requires": [5], "building": "ads"},
-    {"step": 8, "mission_type": "ads_launch_plan", "title": "Lancement Meta Ads", "description": "Campagnes Meta live.", "agent_type": AgentType.MARKETER, "requires": [6, 7], "building": "ads"},
+    {
+        "step": 1,
+        "mission_type": "market_scan",
+        "title": "Etude de marche",
+        "description": "Analyse marche SaaS, concurrents et pricing.",
+        "agent_type": AgentType.RESEARCHER,
+        "requires": [],
+        "building": "hq",
+    },
+    {
+        "step": 2,
+        "mission_type": "landing_page",
+        "title": "Site web live",
+        "description": "Landing SaaS avec pricing, features et CTA demo/trial.",
+        "agent_type": AgentType.BUILDER,
+        "requires": [1],
+        "building": "website",
+    },
+    {
+        "step": 3,
+        "mission_type": "payment_setup",
+        "title": "Setup paiements",
+        "description": "Stripe avec abonnements, essai gratuit et webhooks.",
+        "agent_type": AgentType.FINANCE,
+        "requires": [2],
+        "building": "payments",
+    },
+    {
+        "step": 4,
+        "mission_type": "competitor_ads_analysis",
+        "title": "Analyse pubs concurrents",
+        "description": "Top 5 pubs SaaS concurrentes, angles et budgets estimes.",
+        "agent_type": AgentType.MARKETER,
+        "requires": [2],
+        "building": "ads",
+    },
+    {
+        "step": 5,
+        "mission_type": "ads_launch_plan",
+        "title": "Lancement Meta Ads",
+        "description": "Campagnes Meta ciblant les leads SaaS B2B.",
+        "agent_type": AgentType.MARKETER,
+        "requires": [3, 4],
+        "building": "ads",
+    },
 ]
 
 QUEST_CHAINS: dict[BusinessType, list[dict]] = {
@@ -305,7 +358,46 @@ class QuestChainService:
                     "step_number": step.step_number,
                     "title": step.title,
                     "mission_type": step.mission_type,
-                    "deliverable": mission.deliverable,
+                    "deliverable": _summarize_deliverable(step.mission_type, mission.deliverable),
                 })
 
         return sorted(deliverables, key=lambda d: d["step_number"])
+
+
+def _summarize_deliverable(mission_type: str, deliverable: str) -> str:
+    """For HTML deliverables (landing_page), extract site URL and strip the raw HTML
+    to avoid flooding downstream agents with thousands of tokens of markup.
+    For all other formats, truncate to 2000 chars.
+    """
+    if mission_type != "landing_page":
+        return deliverable[:2000]
+
+    import re
+
+    # Extract the deployed URL appended by the runner
+    site_url = ""
+    url_match = re.search(r"\*\*Site live\s*:\*\*\s*(https?://\S+)", deliverable)
+    if url_match:
+        site_url = url_match.group(1).strip()
+
+    # Extract meaningful text nodes from HTML (title, meta description, h1-h3, p, li)
+    text_chunks: list[str] = []
+    for tag in ("title", "h1", "h2", "h3", "p", "li"):
+        for match in re.finditer(rf"<{tag}[^>]*>(.*?)</{tag}>", deliverable, re.DOTALL | re.IGNORECASE):
+            text = re.sub(r"<[^>]+>", "", match.group(1)).strip()
+            if text and len(text) > 10:
+                text_chunks.append(text)
+
+    summary_parts = []
+    if site_url:
+        summary_parts.append(f"Site live : {site_url}")
+    if text_chunks:
+        combined = " | ".join(text_chunks[:30])
+        summary_parts.append(f"Contenu de la landing page : {combined[:1500]}")
+    else:
+        # Fallback: strip all tags and return plain text
+        plain = re.sub(r"<[^>]+>", " ", deliverable)
+        plain = re.sub(r"\s+", " ", plain).strip()
+        summary_parts.append(plain[:1500])
+
+    return "\n".join(summary_parts)

@@ -1,0 +1,42 @@
+---
+description: Chat spécialisé : système de tâches Polsia (queue, recurring, CEO proposals, billing crédits)
+globs:
+  - backend/app/services/mission.py
+  - backend/app/services/billing.py
+  - backend/app/services/orchestrator.py
+  - backend/app/workers/runner.py
+  - backend/app/workers/celery_app.py
+  - backend/app/agents/tools/generate_image.py
+  - backend/app/agents/tools/create_task.py
+  - backend/app/api/v1/missions.py
+  - ios/RPGAgentCompany/Views/Missions/TaskQueueView.swift
+  - ios/RPGAgentCompany/AppState.swift
+  - ios/RPGAgentCompany/Models/Models.swift
+  - ios/RPGAgentCompany/Services/APIClient.swift
+alwaysApply: false
+---
+# Chat : Système de Tâches
+
+## Référence Polsia
+Voir `.cursor/docs/polsia-task-system.md`
+
+## Règles clés déjà implémentées
+- Débit crédit à l'EXÉCUTION (pas création) — `runner.py`
+- Dédup CEO proposals : PENDING check avant création — `orchestrator.py` + `runner.py`
+- Pré-débit image + remboursement si échec Replicate — `generate_image.py`
+- Double scheduling recurring supprimé — `celery_app.py`
+- `_compute_next_run` honore `hour_utc`, `day_of_week`, `day_of_month`
+
+## À faire (prochains chats)
+- iOS : `start_mission` → plus d'auto-run, mission PENDING en queue
+- iOS : onglet RECURRING dans TaskQueueView
+- iOS : wording "0 CR à la création, 1 CR à l'exécution"
+- Fix `routeTask` URL (manque `companyId`)
+
+## Réponses
+Courtes. Pas de récap. Pas de plan long. Edits directs.
+
+## Exclure du contexte
+- `web/` (ignoré partout)
+- `backend/.venv/`
+- Fichiers d'assets PNG/SVG

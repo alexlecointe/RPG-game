@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json as _json
+from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -21,9 +24,77 @@ class SageMessageIn(BaseModel):
 
 class SageMessageOut(BaseModel):
     reply: str
+    created_task_id: Optional[str] = None
+    created_task_title: Optional[str] = None
 
 
-def _build_sage_system_prompt(company: Company, quest_steps: list[QuestStep], missions: list[Mission]) -> str:
+# ---------------------------------------------------------------------------
+# Sage tool definitions (Polsia CEO agent tools)
+# ---------------------------------------------------------------------------
+
+SAGE_TOOLS = [
+    {
+        "name": "create_task",
+        "description": (
+            "Crée une nouvelle tâche dans la file d'attente du joueur. "
+            "Utilise cet outil quand le joueur demande de lancer une action, "
+            "ou quand tu identifies le prochain move prioritaire. "
+            "La tâche sera exécutée par l'agent le plus adapté. 1 crédit sera débité."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Titre court de la tâche (ex: 'Diagnostiquer les Meta Ads')"},
+                "description": {"type": "string", "description": "Description détaillée de ce que l'agent doit faire"},
+                "agent_type": {
+                    "type": "string",
+                    "enum": ["builder", "marketer", "researcher", "orchestrator", "outreach", "support", "finance", "content", "browser", "data", "ops", "growth"],
+                    "description": "Type d'agent à assigner (optionnel — auto-routing si absent)",
+                },
+            },
+            "required": ["title"],
+        },
+    },
+    {
+        "name": "reject_task",
+        "description": "Rejette (annule) une tâche en attente dans la file. Rembourse 1 crédit.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "L'ID de la tâche à rejeter"},
+                "reason": {"type": "string", "description": "Raison du rejet (ex: 'duplicate', 'no_longer_needed')"},
+            },
+            "required": ["task_id"],
+        },
+    },
+    {
+        "name": "get_task_queue",
+        "description": "Lit la file d'attente actuelle des tâches en attente. Aucun crédit consommé.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+]
+
+# OpenAI format (slightly different schema key)
+SAGE_TOOLS_OPENAI = [
+    {
+        "type": "function",
+        "function": {
+            "name": t["name"],
+            "description": t["description"],
+            "parameters": t["input_schema"],
+        },
+    }
+    for t in SAGE_TOOLS
+]
+
+
+def _build_sage_system_prompt(
+    company: Company,
+    quest_steps: list[QuestStep],
+    missions: list[Mission],
+    pending_tasks: list[Mission] | None = None,
+    subscription_info: dict | None = None,
+) -> str:
     bt = company.business_type.value if company.business_type else "ecommerce"
 
     completed_steps = [s for s in quest_steps if s.status == QuestStepStatus.COMPLETED]
@@ -49,8 +120,24 @@ def _build_sage_system_prompt(company: Company, quest_steps: list[QuestStep], mi
         if m.deliverable:
             deliverables.append(f"- {m.mission_type}: {m.deliverable[:500]}")
 
-    return f"""Tu es Le Sage, le mentor du village dans RPG Agent Company.
-Tu guides le fondateur dans le lancement de son business.
+    # Task queue context
+    pending_list = pending_tasks or []
+    queue_lines = []
+    for t in pending_list[:8]:
+        display = t.title or t.mission_type
+        queue_lines.append(f"  [{t.id[:8]}] #{t.queue_order or '?'} — {display} ({t.agent_type.value}, source={t.source.value if t.source else 'user'})")
+
+    # Credits context
+    credits_info = ""
+    if subscription_info:
+        total = subscription_info.get("total_credits", 0)
+        status = subscription_info.get("status", "")
+        credits_info = f"- Crédits disponibles: {total} (statut: {status})"
+        if total < 3:
+            credits_info += " ⚠️ CRÉDITS FAIBLES"
+
+    return f"""Tu es Le Sage, le CEO agent et mentor du village dans RPG Agent Company.
+Tu guides le fondateur dans le lancement de son business ET tu peux créer des tâches pour les agents.
 
 CONTEXTE DE LA COMPANY:
 - Nom: {company.name}
@@ -60,9 +147,13 @@ CONTEXTE DE LA COMPANY:
 - Audience cible: {company.target_audience or 'Non definie'}
 - Niveau: {company.level} | XP: {company.xp}
 - Batiments: {buildings_list}
+{credits_info}
 
 PROGRESSION QUEST CHAIN ({len(completed_steps)}/{len(quest_steps)} etapes):
 {chr(10).join(quest_status)}
+
+TÂCHES EN ATTENTE ({len(pending_list)}):
+{chr(10).join(queue_lines) if queue_lines else 'Aucune tâche en attente'}
 
 MISSIONS EN COURS ({len(running_missions)}):
 {chr(10).join(f'- {m.mission_type} ({m.agent_type.value})' for m in running_missions) or 'Aucune'}
@@ -73,9 +164,11 @@ LIVRABLES PRODUITS ({len(deliverables)}):
 REGLES:
 - Reponds en francais, de maniere concise et utile (2-4 phrases max sauf si l'utilisateur demande plus de details)
 - Reste dans ton role de Sage/mentor bienveillant du village RPG
-- Si l'utilisateur demande de l'aide sur une etape, guide-le vers le bon batiment/agent
-- Si l'utilisateur demande des conseils business, donne des conseils adaptes a son type de business ({bt})
-- Tu peux suggerer de lancer des quetes disponibles
+- Si l'utilisateur demande de lancer une action ou une tâche → utilise l'outil create_task
+- Avant de créer une tâche similaire à une existante en queue, vérifie si ce n'est pas un doublon
+- Si credits < 3, avertis l'utilisateur avant de créer une tâche
+- Si credits = 0, ne crée PAS de tâche — dis à l'utilisateur d'acheter des crédits
+- Tu peux utiliser reject_task pour nettoyer les doublons si l'utilisateur le demande
 - Ne genere pas de livrables complets, oriente vers les agents specialises
 - Si l'utilisateur pose une question hors sujet, ramene la conversation sur son business
 """
@@ -107,7 +200,20 @@ async def sage_chat(company_id: str, body: SageMessageIn, db: DbSession):
     )
     missions = list(mission_result.scalars().all())
 
-    system_prompt = _build_sage_system_prompt(company, quest_steps, missions)
+    # Fetch pending task queue + subscription for context
+    from app.models.entities import MissionStatus as MS, TaskSource
+    pending_result = await db.execute(
+        select(Mission)
+        .where(Mission.company_id == company_id, Mission.status == MS.PENDING)
+        .order_by(Mission.queue_order.asc().nulls_last())
+        .limit(10)
+    )
+    pending_tasks = list(pending_result.scalars().all())
+
+    from app.services.billing import get_subscription_status
+    sub_info = await get_subscription_status(db, company_id)
+
+    system_prompt = _build_sage_system_prompt(company, quest_steps, missions, pending_tasks, sub_info)
 
     messages = [{"role": "system", "content": system_prompt}]
     for h in body.history[-10:]:
@@ -123,8 +229,13 @@ async def sage_chat(company_id: str, body: SageMessageIn, db: DbSession):
         return SageMessageOut(reply=_mock_reply(body.message, quest_steps))
 
     try:
-        reply = await _call_llm(messages, settings)
-        return SageMessageOut(reply=reply)
+        reply, tool_results = await _call_llm_with_tools(messages, settings, company_id, db)
+        created = tool_results.get("created_task")
+        return SageMessageOut(
+            reply=reply,
+            created_task_id=created.id if created else None,
+            created_task_title=created.title or created.mission_type if created else None,
+        )
     except Exception:
         return SageMessageOut(reply=_mock_reply(body.message, quest_steps))
 
@@ -270,6 +381,157 @@ def _mock_reply(message: str, quest_steps: list[QuestStep]) -> str:
         "tes quetes et de parler aux agents dans le village. "
         "Chaque batiment a un specialiste qui peut t'aider."
     )
+
+
+async def _execute_sage_tool(
+    tool_name: str,
+    tool_input: dict,
+    company_id: str,
+    db: AsyncSession,
+) -> tuple[str, dict]:
+    """Execute a Sage tool call and return (text_result, side_effects)."""
+    from app.models.entities import MissionStatus, TaskSource
+    from app.services.mission import MissionService
+    from sqlalchemy import select
+
+    svc = MissionService(db)
+    side_effects: dict = {}
+
+    if tool_name == "get_task_queue":
+        tasks = await svc.get_task_queue(company_id)
+        if not tasks:
+            return "File d'attente vide.", side_effects
+        lines = [f"#{t.queue_order or '?'} [{t.id[:8]}] {t.title or t.mission_type} ({t.agent_type.value})" for t in tasks]
+        return "Tâches en attente :\n" + "\n".join(lines), side_effects
+
+    if tool_name == "create_task":
+        title = tool_input.get("title", "Nouvelle tâche")
+        description = tool_input.get("description", "")
+        agent_type_str = tool_input.get("agent_type")
+        try:
+            mission = await svc.create_freeform_task(
+                company_id=company_id,
+                title=title,
+                description=description,
+                agent_type_str=agent_type_str,
+                source=TaskSource.CEO_PROPOSAL,
+            )
+            side_effects["created_task"] = mission
+            return f"Tâche créée : [{mission.id[:8]}] {title} (agent: {mission.agent_type.value})", side_effects
+        except ValueError as e:
+            return f"Impossible de créer la tâche : {e}", side_effects
+
+    if tool_name == "reject_task":
+        task_id = tool_input.get("task_id", "")
+        reason = tool_input.get("reason", "rejected_by_sage")
+        # Try full ID first, then partial
+        result = await db.execute(select(Mission).where(Mission.id == task_id))
+        mission = result.scalar_one_or_none()
+        if not mission:
+            # Try prefix match
+            result2 = await db.execute(
+                select(Mission)
+                .where(Mission.company_id == company_id, Mission.id.startswith(task_id))
+                .limit(1)
+            )
+            mission = result2.scalar_one_or_none()
+        if not mission:
+            return f"Tâche {task_id} introuvable.", side_effects
+        if mission.status != MissionStatus.PENDING:
+            return f"Tâche {task_id} n'est pas en attente (status: {mission.status.value}).", side_effects
+        try:
+            await svc.reject_task(mission.id, company_id, reason)
+            return f"Tâche [{task_id[:8]}] rejetée ({reason}).", side_effects
+        except ValueError as e:
+            return f"Erreur rejet : {e}", side_effects
+
+    return f"Outil inconnu: {tool_name}", side_effects
+
+
+async def _call_llm_with_tools(
+    messages: list[dict],
+    settings,
+    company_id: str,
+    db: AsyncSession,
+) -> tuple[str, dict]:
+    """Call LLM with tool support. Returns (final_text, side_effects_dict)."""
+    all_side_effects: dict = {}
+
+    if settings.anthropic_api_key:
+        from anthropic import AsyncAnthropic
+        client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+        system_msg = messages[0]["content"] if messages and messages[0]["role"] == "system" else ""
+        chat_messages = [m for m in messages if m["role"] != "system"]
+
+        response = await client.messages.create(
+            model=settings.anthropic_model,
+            max_tokens=1024,
+            system=system_msg,
+            messages=chat_messages,
+            tools=SAGE_TOOLS,
+        )
+
+        # Process tool use blocks
+        tool_results_content = []
+        for block in response.content:
+            if block.type == "tool_use":
+                tool_result, side = await _execute_sage_tool(block.name, block.input, company_id, db)
+                all_side_effects.update(side)
+                tool_results_content.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": tool_result,
+                })
+
+        if tool_results_content:
+            # Continue conversation with tool results
+            chat_messages.append({"role": "assistant", "content": response.content})
+            chat_messages.append({"role": "user", "content": tool_results_content})
+            final_response = await client.messages.create(
+                model=settings.anthropic_model,
+                max_tokens=1024,
+                system=system_msg,
+                messages=chat_messages,
+            )
+            text = "".join(b.text for b in final_response.content if hasattr(b, "text"))
+        else:
+            text = "".join(b.text for b in response.content if hasattr(b, "text"))
+
+        return text, all_side_effects
+
+    if settings.openai_api_key:
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(api_key=settings.openai_api_key)
+
+        response = await client.chat.completions.create(
+            model=settings.openai_model,
+            messages=messages,
+            max_tokens=1024,
+            tools=SAGE_TOOLS_OPENAI,
+            tool_choice="auto",
+        )
+        msg = response.choices[0].message
+
+        # Handle tool calls
+        if msg.tool_calls:
+            messages.append({"role": "assistant", "content": msg.content or "", "tool_calls": [
+                {"id": tc.id, "type": "function", "function": {"name": tc.function.name, "arguments": tc.function.arguments}}
+                for tc in msg.tool_calls
+            ]})
+            for tc in msg.tool_calls:
+                args = _json.loads(tc.function.arguments)
+                tool_result, side = await _execute_sage_tool(tc.function.name, args, company_id, db)
+                all_side_effects.update(side)
+                messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
+
+            final = await client.chat.completions.create(
+                model=settings.openai_model, messages=messages, max_tokens=1024
+            )
+            return final.choices[0].message.content or "", all_side_effects
+
+        return msg.content or "", all_side_effects
+
+    raise RuntimeError("No LLM provider configured")
 
 
 async def _call_llm(messages: list[dict], settings) -> str:

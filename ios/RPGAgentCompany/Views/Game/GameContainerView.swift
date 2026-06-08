@@ -13,11 +13,26 @@ struct GameContainerView: View {
     @State private var showJournal = false
     @State private var showQuestChain = false
     @State private var showSageChat = false
+    @State private var showNotifications = false
     @State private var lootMission: Mission?
     @State private var isNearSage = false
     @State private var previousXP: Int = 0
     @State private var previousLevel: Int = 1
     @State private var previousCredits: Int = 0
+
+    private var hudCreditTotal: Int {
+        appState.subscription?.totalCredits ?? (appState.company?.wallet.creditsBalance ?? 0)
+    }
+
+    private var hudCreditColor: Color {
+        if hudCreditTotal == 0 { return PixelTheme.accentRed }
+        if hudCreditTotal < 3  { return PixelTheme.accentRed }
+        return PixelTheme.accent
+    }
+
+    private var hudCreditText: String {
+        "\(hudCreditTotal) CR"
+    }
 
     var body: some View {
         ZStack {
@@ -92,6 +107,11 @@ struct GameContainerView: View {
             }
             .environmentObject(appState)
         }
+        .sheet(isPresented: $showNotifications) {
+            NotificationsView()
+                .environmentObject(appState)
+        }
+        .task { await appState.fetchNotifications() }
     }
 
     // MARK: - HUD (landscape layout with XP bar)
@@ -134,10 +154,34 @@ struct GameContainerView: View {
                 }
             }
 
-            GemCounter(
-                balance: appState.company?.wallet.creditsBalance ?? 0,
-                cap: appState.company?.wallet.creditsCap ?? 100
-            )
+            // Notification bell
+            Button { showNotifications = true } label: {
+                ZStack(alignment: .topTrailing) {
+                    Image(systemName: "bell.fill")
+                        .font(.system(size: 12))
+                        .foregroundStyle(appState.unreadNotificationCount > 0 ? PixelTheme.accent : PixelTheme.textSecondary)
+                    if appState.unreadNotificationCount > 0 {
+                        Text("\(min(appState.unreadNotificationCount, 9))")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(PixelTheme.bgDark)
+                            .padding(2)
+                            .background(PixelTheme.accentRed, in: Circle())
+                            .offset(x: 4, y: -4)
+                    }
+                }
+            }
+
+            // Polsia credit HUD — rouge si < 3
+            HStack(spacing: 3) {
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(hudCreditColor)
+                Text(hudCreditText)
+                    .font(PixelTheme.microFont)
+                    .foregroundStyle(hudCreditColor)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
 
             if appState.dailyStreak > 0 {
                 HStack(spacing: 2) {
