@@ -71,17 +71,19 @@ async def admin_deploy_landing(company_id: str, db: DbSession):
 
 
 @router.post("/company/{company_id}/set-site-url")
-async def admin_set_site_url(company_id: str, site_url: str, db: DbSession):
-    """Manually set site_url and render_service_id for a company."""
+async def admin_set_site_url(company_id: str, site_url: str, render_service_id: str = "", db: DbSession = None):
+    """Manually set render_url (= site_url) and optionally render_service_id for a company."""
     from sqlalchemy import select as sa_select
     from app.models.entities import Company as CompanyModel
     result = await db.execute(sa_select(CompanyModel).where(CompanyModel.id == company_id))
     company = result.scalar_one_or_none()
     if not company:
         return {"error": "Company not found"}
-    company.site_url = site_url
+    company.render_url = site_url
+    if render_service_id:
+        company.render_service_id = render_service_id
     await db.commit()
-    return {"site_url": site_url}
+    return {"render_url": company.render_url, "render_service_id": company.render_service_id}
 
 
 @router.get("/overview", response_model=AdminOverview)
