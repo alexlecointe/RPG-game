@@ -360,6 +360,8 @@ class OrchestratorService:
                 await chain_svc.mark_step_running(
                     company.id, step.step_number, mission.id
                 )
+                from app.workers.runner import schedule_mission_run
+                schedule_mission_run(mission.id)
                 launched.append(step)
                 logger.info(
                     "step_auto_launched",
