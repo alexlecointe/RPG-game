@@ -85,14 +85,28 @@ async def ensure_connect_account(company: Company, db) -> str:
     return account["id"]
 
 
+def _https_return_urls(settings) -> tuple[str, str]:
+    """Return HTTPS-safe return/refresh URLs — Stripe requires HTTPS for account_links."""
+    base = (settings.backend_public_url or "https://rpg-agent-api.onrender.com").rstrip("/")
+    return_url = settings.stripe_connect_return_url
+    refresh_url = settings.stripe_connect_refresh_url
+    # Replace deep links with HTTPS backend endpoints (Stripe rejects non-HTTPS)
+    if not return_url.startswith("https://"):
+        return_url = f"{base}/api/v1/stripe/connect/return"
+    if not refresh_url.startswith("https://"):
+        refresh_url = f"{base}/api/v1/stripe/connect/refresh"
+    return return_url, refresh_url
+
+
 async def create_onboarding_link(company: Company, db) -> dict:
     settings = get_settings()
     account_id = await ensure_connect_account(company, db)
+    return_url, refresh_url = _https_return_urls(settings)
 
     data = {
         "account": account_id,
-        "refresh_url": settings.stripe_connect_refresh_url,
-        "return_url": settings.stripe_connect_return_url,
+        "refresh_url": refresh_url,
+        "return_url": return_url,
         "type": "account_onboarding",
     }
 

@@ -5,6 +5,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.router import api_router
+from app.api.v1.stripe_connect import _public_router as stripe_public_router
 from app.core.config import get_settings
 from app.core.database import init_db
 
@@ -119,3 +120,4 @@ async def health_check():
 
 
 app.include_router(api_router, prefix="/api/v1")
+app.include_router(stripe_public_router, prefix="/api/v1")
