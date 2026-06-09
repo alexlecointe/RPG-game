@@ -80,6 +80,7 @@ class Settings(BaseSettings):
 
     # Infrastructure — Render + Neon + GitHub (modele Polsia: 1 service + 1 DB + 1 repo par company)
     render_api_key: str = ""
+    render_owner_id: str = ""
     neon_api_key: str = ""
     github_token: str = ""
     github_org: str = ""

@@ -501,12 +501,34 @@ class InfraService:
     # Render — one web service per company, linked to GitHub repo
     # ------------------------------------------------------------------
 
+    async def _get_render_owner_id(self) -> str:
+        """Fetch the Render owner (team/user) ID from the API if not configured."""
+        if self._settings.render_owner_id:
+            return self._settings.render_owner_id
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(
+                    f"{RENDER_API}/owners?limit=1",
+                    headers=self._headers("render"),
+                )
+                resp.raise_for_status()
+                owners = resp.json()
+                if owners:
+                    return owners[0].get("owner", {}).get("id", "")
+        except Exception as exc:
+            logger.warning("render_owner_fetch_failed", error=str(exc))
+        return ""
+
     async def create_render_service(
         self, company_slug: str, repo_url: str, database_url: str = ""
     ) -> dict:
         """Create a Render web service connected to the company's GitHub repo."""
         if not self._settings.render_api_key:
             return {"provisioned": False, "error": "Render API key not configured"}
+
+        owner_id = await self._get_render_owner_id()
+        if not owner_id:
+            return {"provisioned": False, "error": "Could not determine Render owner ID"}
 
         env_vars = [
             {"key": "COMPANY_SLUG", "value": company_slug},
@@ -528,16 +550,23 @@ class InfraService:
                 "value": f"{self._settings.backend_public_url.rstrip('/')}/api/v1/webhooks/stripe",
             })
 
+        # Render API v1 requires serviceDetails wrapper and ownerId
         payload = {
             "type": "web_service",
             "name": f"rpg-{company_slug}",
+            "ownerId": owner_id,
             "repo": repo_url,
             "autoDeploy": "yes",
             "branch": "main",
-            "runtime": "node",
-            "plan": "free",
-            "buildCommand": "npm install && node db/init.js",
-            "startCommand": "node server.js",
+            "serviceDetails": {
+                "runtime": "node",
+                "plan": "free",
+                "pullRequestPreviewsEnabled": "no",
+                "envSpecificDetails": {
+                    "buildCommand": "npm install && node db/init.js",
+                    "startCommand": "node server.js",
+                },
+            },
             "envVars": env_vars,
         }
 
@@ -670,6 +699,7 @@ class InfraService:
 
         neon_result = await self.create_neon_database(company_slug)
         result["neon"] = neon_result
+        # Neon is optional — landing page works without a DB
         database_url = neon_result.get("database_url", "")
 
         github_result = await self.create_github_repo(company_slug)
@@ -684,8 +714,10 @@ class InfraService:
         else:
             result["render"] = {"provisioned": False, "error": "No GitHub repo to link"}
 
-        provisioned = all(
-            r.get("provisioned", False) for r in [neon_result, github_result, result["render"]]
+        # Success = GitHub + Render provisioned (Neon is optional)
+        provisioned = (
+            github_result.get("provisioned", False)
+            and result["render"].get("provisioned", False)
         )
         result["provisioned"] = provisioned
         result["url"] = result["render"].get("url", "")
