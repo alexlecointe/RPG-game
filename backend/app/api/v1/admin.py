@@ -54,11 +54,34 @@ async def admin_deploy_landing(company_id: str, db: DbSession):
     if not company:
         return {"error": "Company not found"}
 
-    deploy = await deploy_landing_html(company.slug or "", mission.deliverable, company.name, company.render_service_id)
+    slug = company.slug or ""
+    deploy = await deploy_landing_html(slug, mission.deliverable, company.name, company.render_service_id)
+    # Compute URL: prefer SITE_BASE_DOMAIN, fall back to Render slug URL
+    if not deploy.get("site_url") and slug:
+        from app.core.config import get_settings
+        settings = get_settings()
+        if settings.site_base_domain:
+            deploy["site_url"] = f"https://{slug}.{settings.site_base_domain.strip('.')}"
+        else:
+            deploy["site_url"] = f"https://rpg-{slug}.onrender.com"
     if deploy.get("site_url"):
         company.site_url = deploy["site_url"]
         await db.commit()
     return deploy
+
+
+@router.post("/company/{company_id}/set-site-url")
+async def admin_set_site_url(company_id: str, site_url: str, db: DbSession):
+    """Manually set site_url and render_service_id for a company."""
+    from sqlalchemy import select as sa_select
+    from app.models.entities import Company as CompanyModel
+    result = await db.execute(sa_select(CompanyModel).where(CompanyModel.id == company_id))
+    company = result.scalar_one_or_none()
+    if not company:
+        return {"error": "Company not found"}
+    company.site_url = site_url
+    await db.commit()
+    return {"site_url": site_url}
 
 
 @router.get("/overview", response_model=AdminOverview)
