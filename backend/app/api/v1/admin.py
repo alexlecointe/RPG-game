@@ -22,6 +22,45 @@ from app.schemas.api import (
 router = APIRouter(prefix="/admin", dependencies=[Depends(verify_api_key)])
 
 
+@router.post("/infra/provision/{slug}")
+async def admin_provision_company(slug: str):
+    """Test + run infra provisioning for a company slug. Returns full result."""
+    from app.services.infra import InfraService
+    infra = InfraService()
+    result = await infra.provision_company(slug)
+    return result
+
+
+@router.post("/infra/deploy-landing/{company_id}")
+async def admin_deploy_landing(company_id: str, db: DbSession):
+    """Re-deploy the latest landing_page deliverable for a company."""
+    from sqlalchemy import select as sa_select
+    from app.models.entities import Mission, MissionStatus
+    from app.services.site_deploy import deploy_landing_html
+    from app.services.company import CompanyService
+
+    result = await db.execute(
+        sa_select(Mission)
+        .where(Mission.company_id == company_id, Mission.mission_type == "landing_page", Mission.status == MissionStatus.COMPLETED)
+        .order_by(Mission.completed_at.desc())
+        .limit(1)
+    )
+    mission = result.scalar_one_or_none()
+    if not mission or not mission.deliverable:
+        return {"error": "No completed landing_page mission found"}
+
+    svc = CompanyService(db)
+    company = await svc.get_company(company_id)
+    if not company:
+        return {"error": "Company not found"}
+
+    deploy = await deploy_landing_html(company.slug or "", mission.deliverable, company.name, company.render_service_id)
+    if deploy.get("site_url"):
+        company.site_url = deploy["site_url"]
+        await db.commit()
+    return deploy
+
+
 @router.get("/overview", response_model=AdminOverview)
 async def admin_overview(days: int = 30, db: DbSession = None):
     since = datetime.now(timezone.utc) - timedelta(days=days)

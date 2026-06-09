@@ -66,6 +66,10 @@ final class APIClient {
     private static let localURL = "http://192.168.1.15:8080/api/v1"
     #endif
 
+    var isUsingLocal: Bool {
+        UserDefaults.standard.string(forKey: Self.baseURLKey) == Self.localURL
+    }
+
     var baseURL: String {
         if let custom = UserDefaults.standard.string(forKey: Self.baseURLKey), !custom.isEmpty {
             return custom
@@ -73,12 +77,20 @@ final class APIClient {
         return Self.productionURL
     }
 
+    func useLocalBackend() {
+        UserDefaults.standard.set(Self.localURL, forKey: Self.baseURLKey)
+    }
+
+    func useProductionBackend() {
+        UserDefaults.standard.removeObject(forKey: Self.baseURLKey)
+    }
+
     var apiKey = "rpg-prod-key-2026"
 
     private lazy var session: URLSession = {
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 15
-        config.timeoutIntervalForResource = 30
+        config.timeoutIntervalForRequest = 45
+        config.timeoutIntervalForResource = 90
         return URLSession(configuration: config)
     }()
 
@@ -298,8 +310,8 @@ final class APIClient {
 
     // MARK: - Auto-pilot
 
-    func toggleAutoPilot(companyId: String, enabled: Bool) async throws -> Company {
-        return try await postJSON("/companies/\(companyId)/auto-pilot", body: ["enabled": enabled])
+    func toggleAutoPilot(companyId: String, enabled: Bool) async throws -> AutoPilotResponse {
+        try await postJSON("/companies/\(companyId)/auto-pilot", body: ["enabled": enabled])
     }
 
     // MARK: - Edit Task
@@ -309,6 +321,12 @@ final class APIClient {
             "/missions/\(missionId)",
             body: ["title": title, "description": description]
         )
+    }
+
+    // MARK: - Token usage
+
+    func fetchTokenUsage(companyId: String, days: Int = 30) async throws -> TokenUsageSummary {
+        try await get("/companies/\(companyId)/token-usage?days=\(days)")
     }
 
     // MARK: - Notifications
@@ -379,7 +397,11 @@ final class APIClient {
     }
 
     func initSubscription(companyId: String) async throws -> SubscriptionInfo {
-        try await postEmpty("/companies/\(companyId)/billing/init")
+        try await get("/companies/\(companyId)/billing/init")
+    }
+
+    func addTrialCredits(companyId: String) async throws {
+        let _: [String: Int] = try await postEmpty("/companies/\(companyId)/billing/add-trial-credits")
     }
 
     // MARK: - Orders (Système B)

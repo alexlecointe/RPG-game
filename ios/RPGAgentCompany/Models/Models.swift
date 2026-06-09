@@ -45,11 +45,17 @@ enum BusinessType: String, Codable, CaseIterable {
         }
     }
 
-    var dependencyGraph: [Int: [Int]] {
-        // 5 steps for all types: QG → Site Web → Paiements → Ads (prep) → Ads (launch)
-        // Steps 3 and 4 both unlock from step 2 (parallel)
-        // Step 5 requires both 3 and 4
-        return [1: [], 2: [1], 3: [2], 4: [2], 5: [3, 4]]
+    /// Builds a dependency graph from the actual backend status of quest steps.
+    /// A step is available if all its numbered prerequisites are completed/failed.
+    static func dependencyGraph(from steps: [QuestStep]) -> [Int: [Int]] {
+        // Default linear chain; the backend controls actual unlock logic
+        var graph: [Int: [Int]] = [:]
+        let sorted = steps.sorted { $0.stepNumber < $1.stepNumber }
+        for (i, step) in sorted.enumerated() {
+            if i == 0 { graph[step.stepNumber] = [] }
+            else { graph[step.stepNumber] = [sorted[i - 1].stepNumber] }
+        }
+        return graph
     }
 }
 
@@ -111,6 +117,31 @@ struct Wallet: Codable {
         case creditsBalance = "credits_balance"
         case creditsCap = "credits_cap"
         case dailyFreeCredits = "daily_free_credits"
+    }
+}
+
+extension Company {
+    static func demo(name: String = "Ma Base", businessType: BusinessType = .ecommerce) -> Company {
+        let json: [String: Any] = [
+            "id": "local-demo",
+            "name": name,
+            "mission_statement": "Construire mon empire",
+            "product_description": "",
+            "target_audience": "",
+            "business_type": businessType.rawValue,
+            "level": 1,
+            "xp": 0,
+            "buildings": [
+                ["id": "b-orchestrator", "agent_type": "orchestrator", "level": 1],
+                ["id": "b-builder", "agent_type": "builder", "level": 1],
+                ["id": "b-marketer", "agent_type": "marketer", "level": 1],
+                ["id": "b-finance", "agent_type": "finance", "level": 1]
+            ],
+            "wallet": ["credits_balance": 0, "credits_cap": 100, "daily_free_credits": 3],
+            "auto_pilot": false
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: json)
+        return try! JSONDecoder().decode(Company.self, from: data)
     }
 }
 
@@ -249,13 +280,22 @@ struct QuestStep: Codable, Identifiable {
     var isAvailable: Bool { status == "available" }
     var isRunning: Bool { status == "running" }
     var isCompleted: Bool { status == "completed" }
+    var isFailed: Bool { status == "failed" }
+    var isActionable: Bool { isAvailable || isFailed }
 }
 
-struct SageMessage: Identifiable {
-    let id = UUID()
+struct SageMessage: Identifiable, Codable {
+    let id: UUID
     let role: String  // "user" or "assistant"
     let content: String
     let timestamp: Date
+
+    init(role: String, content: String, timestamp: Date) {
+        self.id = UUID()
+        self.role = role
+        self.content = content
+        self.timestamp = timestamp
+    }
 
     var isUser: Bool { role == "user" }
 }
@@ -269,6 +309,14 @@ struct SageReply: Codable {
         case reply
         case createdTaskId = "created_task_id"
         case createdTaskTitle = "created_task_title"
+    }
+}
+
+struct AutoPilotResponse: Codable {
+    let autoPilot: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case autoPilot = "auto_pilot"
     }
 }
 
@@ -288,6 +336,7 @@ struct Mission: Codable, Identifiable {
     let deliverableFormat: String?
     let deliverable: String?
     let qualityScore: Double?
+    let qualityFeedback: String?
     let errorMessage: String?
     let startedAt: String?
     let completedAt: String?
@@ -304,6 +353,7 @@ struct Mission: Codable, Identifiable {
         case xpReward = "xp_reward"
         case deliverableFormat = "deliverable_format"
         case qualityScore = "quality_score"
+        case qualityFeedback = "quality_feedback"
         case errorMessage = "error_message"
         case startedAt = "started_at"
         case completedAt = "completed_at"
@@ -375,19 +425,50 @@ struct CompanyNotification: Codable, Identifiable {
         case "chain_completed": return "star.fill"
         case "mission_failed": return "xmark.circle.fill"
         case "low_credits": return "bolt.slash.fill"
+        case "payment_received": return "creditcard.fill"
+        case "ads_launched", "ads_created": return "megaphone.fill"
+        case "ads_paused": return "pause.circle.fill"
+        case "site_deployed": return "globe"
+        case "mission_started": return "play.circle.fill"
+        case "task_queued": return "tray.and.arrow.down.fill"
+        case "daily_chest": return "gift.fill"
+        case "credits_purchased": return "bag.fill"
         default: return "bell.fill"
         }
     }
 
     var iconColor: String {
         switch type {
-        case "step_completed": return "green"
-        case "step_unlocked": return "accent"
-        case "chain_completed": return "accent"
+        case "step_completed", "payment_received", "site_deployed", "credits_purchased": return "green"
+        case "step_unlocked", "chain_completed", "mission_started": return "accent"
+        case "ads_launched", "ads_created": return "orange"
         case "mission_failed": return "red"
-        case "low_credits": return "red"
+        case "low_credits", "ads_paused": return "red"
+        case "task_queued", "daily_chest": return "accent"
         default: return "secondary"
         }
+    }
+}
+
+// MARK: - Token Usage
+
+struct TokenUsageSummary: Codable {
+    let companyId: String
+    let totalTokens: Int
+    let totalInputTokens: Int
+    let totalOutputTokens: Int
+    let estimatedCostUsd: Double
+    let missionCount: Int
+    let periodDays: Int
+
+    enum CodingKeys: String, CodingKey {
+        case companyId = "company_id"
+        case totalTokens = "total_tokens"
+        case totalInputTokens = "total_input_tokens"
+        case totalOutputTokens = "total_output_tokens"
+        case estimatedCostUsd = "estimated_cost_usd"
+        case missionCount = "mission_count"
+        case periodDays = "period_days"
     }
 }
 
