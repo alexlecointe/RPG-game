@@ -87,12 +87,16 @@ async def get_or_create_subscription(db: AsyncSession, company: Company) -> Subs
     result = await db.execute(
         select(Subscription).where(Subscription.company_id == company.id)
     )
+    TRIAL_STARTER_CREDITS = 10
     sub = result.scalar_one_or_none()
     if sub:
+        # Migrate old subscriptions that were created with 0 starter credits
+        if (sub.credits_remaining or 0) == 0 and (sub.pack_credits or 0) == 0 and (sub.credits_monthly or 0) == 0:
+            sub.credits_remaining = TRIAL_STARTER_CREDITS
+            sub.credits_monthly = TRIAL_STARTER_CREDITS
         return sub
 
     now = datetime.now(timezone.utc)
-    TRIAL_STARTER_CREDITS = 10
     sub = Subscription(
         company_id=company.id,
         status=SubscriptionStatus.TRIAL,
