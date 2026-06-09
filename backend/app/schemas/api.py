@@ -103,6 +103,7 @@ class MissionOut(BaseModel):
     deliverable_format: Optional[str]
     deliverable: Optional[str]
     quality_score: Optional[float] = None
+    quality_feedback: Optional[str] = None
     error_message: Optional[str]
     started_at: Optional[datetime]
     completed_at: Optional[datetime]

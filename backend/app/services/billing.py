@@ -92,11 +92,12 @@ async def get_or_create_subscription(db: AsyncSession, company: Company) -> Subs
         return sub
 
     now = datetime.now(timezone.utc)
+    TRIAL_STARTER_CREDITS = 10
     sub = Subscription(
         company_id=company.id,
         status=SubscriptionStatus.TRIAL,
-        credits_monthly=0,
-        credits_remaining=0,
+        credits_monthly=TRIAL_STARTER_CREDITS,
+        credits_remaining=TRIAL_STARTER_CREDITS,
         credits_used_period=0,
         pack_credits=0,
         trial_end=now + timedelta(days=TRIAL_DAYS),

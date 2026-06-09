@@ -272,3 +272,16 @@ async def init_subscription(company_id: str, db: DbSession):
     await db.commit()
     status = await get_subscription_status(db, company_id)
     return status
+
+
+@router.post("/companies/{company_id}/billing/add-trial-credits")
+async def add_trial_credits(company_id: str, db: DbSession):
+    """Add 10 trial credits to the subscription (debug / onboarding recovery)."""
+    svc = CompanyService(db)
+    company = await svc.get_company(company_id)
+    if not company:
+        raise HTTPException(404, "Company not found")
+    sub = await get_or_create_subscription(db, company)
+    sub.pack_credits = (sub.pack_credits or 0) + 10
+    await db.commit()
+    return {"pack_credits": sub.pack_credits, "credits_remaining": sub.credits_remaining}

@@ -61,17 +61,53 @@ class CompanyService:
                 return candidate
         return f"{base[:80]}-{uuid.uuid4().hex[:8]}"
 
+    @staticmethod
+    def _detect_business_type(
+        name: str,
+        mission: str,
+        product: str,
+        audience: str,
+    ) -> "BusinessType":
+        """Heuristic detection of business type from free text. Fast, no LLM needed."""
+        corpus = f"{name} {mission} {product} {audience}".lower()
+        app_signals = [
+            "app", "ios", "android", "mobile", "saas", "software", "tool", "platform",
+            "dashboard", "api", "developer", "subscription", "b2b", "marketplace",
+            "application", "plugin", "extension", "integration",
+        ]
+        ecom_signals = [
+            "shop", "store", "product", "sell", "ecommerce", "e-commerce", "boutique",
+            "vente", "achat", "livraison", "commande", "catalogue", "dropshipping",
+            "physical", "goods", "fashion", "clothing", "food", "beauty",
+        ]
+        app_score = sum(1 for w in app_signals if w in corpus)
+        ecom_score = sum(1 for w in ecom_signals if w in corpus)
+        if app_score > ecom_score:
+            return BusinessType.APP if app_score <= 3 else BusinessType.SAAS
+        return BusinessType.ECOMMERCE
+
     async def create_company(self, user_id: str, data: CompanyCreate) -> Company:
         slug = await self._ensure_unique_slug(data.name)
+        product_description = data.product_description.strip() or data.mission_statement
+
+        # Auto-detect business type from text if client sent the default
+        business_type = data.business_type
+        if business_type == BusinessType.ECOMMERCE:
+            detected = self._detect_business_type(
+                data.name, data.mission_statement, product_description, data.target_audience
+            )
+            if detected != BusinessType.ECOMMERCE:
+                business_type = detected
+
         company = Company(
             user_id=user_id,
             name=data.name,
             slug=slug,
             mission_statement=data.mission_statement,
-            product_description=data.product_description,
+            product_description=product_description,
             target_audience=data.target_audience,
             competitor_url=data.competitor_url,
-            business_type=data.business_type,
+            business_type=business_type,
         )
         self.db.add(company)
         await self.db.flush()
