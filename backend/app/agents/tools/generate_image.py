@@ -117,7 +117,21 @@ def create_generate_image_tool(api_token: str, company_id: str = "") -> ToolDefi
                         debited = True
                         _log.info("image_credit_pre_debited", company_id=company_id)
             except ValueError:
-                return json.dumps({"error": "no_credits_for_image", "message": "Plus de crédits pour générer une image."})
+                return json.dumps({
+                    "generated": False,
+                    "image_url": None,
+                    "css_placeholder": (
+                        "<div style=\"width:100%;max-width:480px;aspect-ratio:4/3;"
+                        "background:linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%);"
+                        "border-radius:12px;display:flex;align-items:center;justify-content:center;"
+                        "font-size:3em;\">🛍️</div>"
+                    ),
+                    "instruction": (
+                        "No credits available for image generation. "
+                        "IMPORTANT: use the css_placeholder HTML directly instead of an <img> tag. "
+                        "You MUST still generate the complete HTML landing page and call deploy_site."
+                    ),
+                })
             except Exception as exc:
                 _log.warning("image_credit_pre_debit_error", company_id=company_id, error=str(exc))
 
@@ -140,13 +154,29 @@ def create_generate_image_tool(api_token: str, company_id: str = "") -> ToolDefi
                             _log.info("image_credit_refunded", company_id=company_id)
                 except Exception:
                     pass
-            raise
+            # Return a usable CSS placeholder instead of raising — the agent MUST continue
+            _log.warning("generate_image_fallback", error=str(exc))
+            return json.dumps({
+                "generated": False,
+                "image_url": None,
+                "css_placeholder": (
+                    "<div style=\"width:100%;max-width:480px;aspect-ratio:4/3;"
+                    "background:linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%);"
+                    "border-radius:12px;display:flex;align-items:center;justify-content:center;"
+                    "font-size:3em;\">🛍️</div>"
+                ),
+                "instruction": (
+                    "Image generation is unavailable. "
+                    "IMPORTANT: use the css_placeholder HTML directly in the page instead of an <img> tag. "
+                    "You MUST still generate the complete HTML landing page and call deploy_site."
+                ),
+            })
 
-        # Check Replicate returned an error payload — refund if so
-        if debited and company_id:
-            import json as _json
-            parsed = _json.loads(result_json) if result_json else {}
-            if parsed.get("error") and not parsed.get("generated"):
+        # Check Replicate returned an error payload — refund if so and add CSS fallback
+        import json as _json
+        parsed = _json.loads(result_json) if result_json else {}
+        if parsed.get("error") and not parsed.get("generated"):
+            if debited and company_id:
                 try:
                     from app.core.database import SessionLocal
                     from app.services.billing import get_or_create_subscription
@@ -161,6 +191,21 @@ def create_generate_image_tool(api_token: str, company_id: str = "") -> ToolDefi
                             _log.info("image_credit_refunded_no_output", company_id=company_id)
                 except Exception:
                     pass
+            return json.dumps({
+                "generated": False,
+                "image_url": None,
+                "css_placeholder": (
+                    "<div style=\"width:100%;max-width:480px;aspect-ratio:4/3;"
+                    "background:linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%);"
+                    "border-radius:12px;display:flex;align-items:center;justify-content:center;"
+                    "font-size:3em;\">🛍️</div>"
+                ),
+                "instruction": (
+                    "Image generation is unavailable. "
+                    "IMPORTANT: use the css_placeholder HTML directly in the page instead of an <img> tag. "
+                    "You MUST still generate the complete HTML landing page and call deploy_site."
+                ),
+            })
 
         return result_json
 
