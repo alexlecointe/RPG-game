@@ -476,9 +476,10 @@ async def _call_anthropic(
     api_tools = [t.to_anthropic_schema() for t in tools] if tools else []
     registry = tool_registry if (tool_registry and tools) else (get_tool_registry() if tools else None)
 
+    is_html_mission = output_format == "html"
+
     for iteration in range(max_iterations + 1):
-        # Landing pages need more tokens to generate full HTML; final iteration never uses tools
-        _max_tok = 8192 if (api_tools and iteration == max_iterations) else 4096
+        _max_tok = 16384 if is_html_mission else 4096
         response, latency = await call_anthropic_raw(
             system_prompt, messages, max_tokens=_max_tok,
             tools=api_tools or None, timeout_s=COMPLEX_TIMEOUT_S,
@@ -533,7 +534,7 @@ async def _call_anthropic(
     if not text_parts:
         logger.info("tool_loop_exhausted_forcing_synthesis", provider="anthropic")
         synth_response, synth_latency = await call_anthropic_raw(
-            system_prompt, messages, max_tokens=4096,
+            system_prompt, messages, max_tokens=16384 if is_html_mission else 4096,
             tools=None, timeout_s=COMPLEX_TIMEOUT_S,
         )
         text_parts = [b.text for b in synth_response.content if hasattr(b, "text")]

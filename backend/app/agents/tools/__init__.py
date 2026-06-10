@@ -81,7 +81,7 @@ MISSION_TOOLS: dict[str, list[str]] = {
     "product_brief": _with_create_task(["web_search", "query_learnings", "store_asset", "company_assets"]),
     "supplier_sourcing": _with_create_task(["web_search", "web_scrape", "query_learnings", "store_asset", "company_assets"]),
     "brand_design": _with_create_task(["web_search", "generate_image", "store_asset", "company_assets"]),
-    "landing_page": _with_create_task(["web_search", "web_scrape", "deploy_site", "generate_image", "browser_action", "send_email", "infra_action", "store_asset", "company_assets"]),
+    "landing_page": _with_create_task(["web_scrape", "company_assets"]),
     "payment_setup": _with_create_task(["web_search", "stripe_action", "store_asset", "company_assets"]),
     "competitor_ads_analysis": _with_create_task(["web_search", "web_scrape", "browser_action", "google_trends", "query_learnings", "store_asset", "company_assets"]),
     "ad_copy_pack": _with_create_task(["web_search", "generate_image", "store_asset", "company_assets"]),
@@ -239,7 +239,7 @@ def get_company_tool_registry(
         ))
 
     from app.agents.tools.deploy_site import create_deploy_site_tool
-    registry.register(create_deploy_site_tool(company_slug=company_slug))
+    registry.register(create_deploy_site_tool(company_slug=company_slug, company_id=company_id))
 
     # create_task: allows agents to generate sub-tasks (source=agent_generated)
     from app.agents.tools.create_task import create_create_task_tool

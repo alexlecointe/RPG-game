@@ -52,7 +52,23 @@ Generer une landing page HTML/CSS complete, prete a deployer, optimisee pour la 
 - CSS inline (pas de fichier externe)
 - Mobile-first, responsive (media queries)
 - Typographie : system-ui ou Google Fonts via CDN
-- Couleurs : utiliser la charte de marque si disponible dans le contexte
+- Couleurs : utiliser OBLIGATOIREMENT la palette du BRIEF CREATIF WEBSITE si presente dans le contexte
 - Animations CSS subtiles (fade-in, hover effects)
 - Pas de JavaScript requis (sauf scroll smooth)
 - Pas de placeholder / lorem ipsum — tout le contenu doit etre reel
+
+## Utilisation du brief creatif
+Si un "BRIEF CREATIF WEBSITE" est present dans le contexte :
+- La palette, la typographie et le style photo sont OBLIGATOIRES — ne pas les ignorer
+- Le "BRIEF IMAGE PRODUIT" decrit le style visuel souhaite
+- La structure de page recommandee remplace la structure generique ci-dessus
+- Le CTA et les trust signals sont adaptes au vrai produit — utilise-les
+
+## Image produit
+- Si "IMAGE PRODUIT PRÉ-GÉNÉRÉE" est presente dans le contexte : utilise cette URL en <img> dans le hero ET product showcase.
+- Si aucune image n'est disponible : utilise un placeholder CSS elegant (gradient + emoji adapte au produit).
+- L'image est generee en amont par le systeme — tu n'as PAS besoin de la generer toi-meme.
+
+## Sortie
+- Ta reponse DOIT etre le HTML complet (<!DOCTYPE html>...</html>). Rien d'autre.
+- Le systeme publie automatiquement ton HTML. N'appelle PAS deploy_site.
