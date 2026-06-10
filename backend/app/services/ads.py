@@ -25,7 +25,17 @@ from app.models.entities import (
     NotificationType,
     WalletTransaction,
 )
-from app.services.site_deploy import build_site_url
+from app.services.site_hosting import build_gateway_url as _build_site_url_gateway
+from app.services.site_deploy import build_site_url as _build_site_url_legacy
+
+
+def _get_company_site_url(company) -> str:
+    """Resolve the live site URL: gateway first, legacy Render as fallback."""
+    slug = company.slug or ""
+    url = _build_site_url_gateway(slug)
+    if url:
+        return url
+    return _build_site_url_legacy(slug, company.render_url) or ""
 
 logger = structlog.get_logger()
 META_GRAPH = "https://graph.facebook.com/v21.0"
@@ -174,7 +184,7 @@ async def launch_meta_campaign(
         ad_set_id = resp.json().get("id")
         campaign.meta_ad_set_id = ad_set_id
 
-        link_url = build_site_url(company.slug or "", company.render_url) or ""
+        link_url = _get_company_site_url(company)
 
         for i, video_url in enumerate(video_urls[:3]):
             title = headlines[i] if i < len(headlines) and headlines[i] else campaign.name
@@ -279,7 +289,7 @@ async def _auto_refresh_creative(
             logger.warning("trigger2_video_generation_failed", campaign_id=camp.id)
             return
 
-        link_url = build_site_url(company.slug or "", company.render_url) or ""
+        link_url = _get_company_site_url(company)
 
         # Upload to Meta
         video_resp = await upload_video(token, ad_account, new_video_url, old_creative.title)

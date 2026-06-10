@@ -17,11 +17,46 @@ AUTO_MISSIONS: list[str] = ["market_scan"]
 
 
 async def _company_out(company, wallet) -> CompanyOut:
-    from app.services.site_deploy import build_site_url
+    from app.services.site_hosting import build_gateway_url, get_live_artifact
     from app.services.stripe_connect import fetch_connect_status, get_stripe_status
-
+    from app.core.database import SessionLocal
     settings = get_settings()
-    site_url = build_site_url(company.slug or "", company.render_url)
+
+    # Check if a live site artifact exists for this company
+    site_url: str | None = None
+    site_version: int | None = None
+    site_status = "not_created"
+    if company.slug:
+        async with SessionLocal() as _db:
+            artifact = await get_live_artifact(_db, company.slug)
+            if artifact:
+                site_url = build_gateway_url(company.slug)
+                site_version = artifact.version
+                site_status = "live"
+            else:
+                from sqlalchemy import select as _sel
+                from app.models.entities import Mission, MissionStatus as _MS
+                # Check if a landing_page mission is currently running
+                running = await _db.execute(
+                    _sel(Mission).where(
+                        Mission.company_id == company.id,
+                        Mission.mission_type == "landing_page",
+                        Mission.status == _MS.RUNNING,
+                    ).limit(1)
+                )
+                if running.scalar_one_or_none():
+                    site_status = "publishing"
+                else:
+                    # Check if last landing_page mission failed
+                    failed = await _db.execute(
+                        _sel(Mission).where(
+                            Mission.company_id == company.id,
+                            Mission.mission_type == "landing_page",
+                            Mission.status == _MS.FAILED,
+                        ).order_by(Mission.created_at.desc()).limit(1)
+                    )
+                    if failed.scalar_one_or_none():
+                        site_status = "failed"
     stripe_status = get_stripe_status(company)
     if company.stripe_connect_account_id:
         try:
@@ -43,10 +78,13 @@ async def _company_out(company, wallet) -> CompanyOut:
         buildings=company.buildings,
         render_url=company.render_url,
         site_url=site_url,
+        site_version=site_version,
+        site_status=site_status,
         stripe_connect_status=stripe_status,
         daily_ads_budget_cents=company.daily_ads_budget_cents or 0,
         ads_wallet_balance_cents=company.ads_wallet_balance_cents or 0,
         auto_pilot=company.auto_pilot or False,
+        product_image_url=company.product_image_url,
         wallet=WalletOut(
             credits_balance=wallet.credits_balance,
             credits_cap=settings.credits_cap,
@@ -126,6 +164,80 @@ async def get_company(company_id: str, db: DbSession):
     await wallet_svc.apply_daily_regen(company.wallet)
     await db.commit()
     return await _company_out(company, company.wallet)
+
+
+@router.delete("/{company_id}", status_code=204)
+async def delete_company(company_id: str, db: DbSession):
+    """Delete a company and all its data + infra (debug / reset flow)."""
+    from sqlalchemy import delete as _del
+    from app.models.entities import (
+        AdCampaign, AdCreative, AdSnapshot, BetaFeedback, Building,
+        BrowserSession, CompanyAsset, CompanyEmail, CompanyMemory,
+        CompanyNotification, CompanySkill, GodModeSession, Learning,
+        LLMCall, Mission, MissionLog, Order, PaymentLink, QuestStep,
+        RecurringMission, Subscription, TokenUsage, ToolCallLog,
+        WalletTransaction, Wallet,
+    )
+
+    company_result = await db.execute(
+        select(Company).where(Company.id == company_id)
+    )
+    company = company_result.scalar_one_or_none()
+    if not company:
+        raise HTTPException(404, "Company not found")
+
+    # Tear down infra best-effort (non-blocking)
+    if company.render_service_id or company.github_repo_url or company.neon_project_id:
+        try:
+            from app.services.infra import InfraService
+            infra = InfraService()
+            await infra.delete_all_infra(
+                company.slug or company.name,
+                service_id=company.render_service_id or "",
+                neon_project_id=company.neon_project_id or "",
+            )
+        except Exception:
+            pass
+
+    mission_ids_subq = select(Mission.id).where(Mission.company_id == company_id)
+
+    for stmt in [
+        # Mission logs first (FK to missions)
+        _del(MissionLog).where(MissionLog.mission_id.in_(mission_ids_subq)),
+        _del(TokenUsage).where(TokenUsage.company_id == company_id),
+        _del(LLMCall).where(LLMCall.company_id == company_id),
+        _del(ToolCallLog).where(ToolCallLog.company_id == company_id),
+        _del(BrowserSession).where(BrowserSession.company_id == company_id),
+        # Ads
+        _del(AdCreative).where(AdCreative.company_id == company_id),
+        _del(AdSnapshot).where(AdSnapshot.company_id == company_id),
+        _del(AdCampaign).where(AdCampaign.company_id == company_id),
+        # Missions
+        _del(Mission).where(Mission.company_id == company_id),
+        _del(QuestStep).where(QuestStep.company_id == company_id),
+        # Company data
+        _del(Building).where(Building.company_id == company_id),
+        _del(CompanyMemory).where(CompanyMemory.company_id == company_id),
+        _del(CompanyAsset).where(CompanyAsset.company_id == company_id),
+        _del(CompanyEmail).where(CompanyEmail.company_id == company_id),
+        _del(CompanyNotification).where(CompanyNotification.company_id == company_id),
+        _del(CompanySkill).where(CompanySkill.company_id == company_id),
+        _del(BetaFeedback).where(BetaFeedback.company_id == company_id),
+        _del(RecurringMission).where(RecurringMission.company_id == company_id),
+        _del(Learning).where(Learning.source_company_id == company_id),
+        # Billing
+        _del(WalletTransaction).where(WalletTransaction.company_id == company_id),
+        _del(PaymentLink).where(PaymentLink.company_id == company_id),
+        _del(GodModeSession).where(GodModeSession.company_id == company_id),
+        _del(Order).where(Order.company_id == company_id),
+        _del(Subscription).where(Subscription.company_id == company_id),
+        _del(Wallet).where(Wallet.company_id == company_id),
+        # Company itself
+        _del(Company).where(Company.id == company_id),
+    ]:
+        await db.execute(stmt)
+
+    await db.commit()
 
 
 @router.post(

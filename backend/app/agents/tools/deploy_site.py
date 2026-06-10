@@ -114,15 +114,16 @@ def _generate_local_package(
     }
 
 
-def create_deploy_site_tool(company_slug: str = "") -> ToolDefinition:
+def create_deploy_site_tool(company_slug: str = "", company_id: str = "") -> ToolDefinition:
     async def execute(
         html_content: str,
         project_name: str,
     ) -> str:
         project_name = _sanitize_project_name(project_name)
+        slug = company_slug or project_name
 
         content_hash = hashlib.sha256(html_content.encode()).hexdigest()[:16]
-        cache_key = f"{project_name}:{content_hash}"
+        cache_key = f"{slug}:{content_hash}"
         if cache_key in _deploy_cache:
             cached = dict(_deploy_cache[cache_key])
             cached["cached"] = True
@@ -131,13 +132,44 @@ def create_deploy_site_tool(company_slug: str = "") -> ToolDefinition:
         from app.core.config import get_settings
         settings = get_settings()
 
-        slug = company_slug or project_name
         if settings.meta_pixel_id:
             html_content = _inject_pixel(html_content, settings.meta_pixel_id)
+
+        # Primary: shared gateway (SiteArtifact) — no per-company Render service
+        if company_id and slug:
+            try:
+                from app.core.database import SessionLocal
+                from app.services.site_hosting import build_gateway_url, publish_site
+                async with SessionLocal() as db:
+                    artifact = await publish_site(
+                        db,
+                        company_id=company_id,
+                        slug=slug,
+                        html_content=html_content,
+                        mission_id=None,
+                    )
+                    await db.commit()
+                site_url = build_gateway_url(slug)
+                result = {
+                    "deployed": True,
+                    "platform": "gateway",
+                    "project": project_name,
+                    "slug": slug,
+                    "site_url": site_url,
+                    "version": artifact.version,
+                    "message": f"Site publié via le gateway partagé. URL: {site_url}",
+                }
+                logger.info("deploy_site_gateway", slug=slug, version=artifact.version)
+                _deploy_cache[cache_key] = result
+                return json.dumps(result)
+            except Exception as exc:
+                logger.warning("deploy_site_gateway_failed", slug=slug, error=str(exc))
+
+        # Fallback: GitHub/Render (legacy, only if gateway failed and infra configured)
         if settings.github_token and settings.github_org:
             result = await _deploy_via_infra(slug, html_content, project_name)
         else:
-            logger.info("deploy_site_fallback_local", reason="no github/render keys")
+            logger.info("deploy_site_fallback_local", reason="no gateway company_id and no github keys")
             result = _generate_local_package(html_content, project_name)
 
         _deploy_cache[cache_key] = result
@@ -146,9 +178,9 @@ def create_deploy_site_tool(company_slug: str = "") -> ToolDefinition:
     return ToolDefinition(
         name="deploy_site",
         description=(
-            "Deploy an HTML landing page to the web. Pushes the page to the "
-            "company's GitHub repo, which triggers an automatic Render deploy. "
-            "The site goes live at the company's custom URL within minutes."
+            "Deploy an HTML landing page to the web. Publishes the page via the "
+            "shared gateway so it goes live immediately at the company's URL. "
+            "The site is accessible within seconds of calling this tool."
         ),
         parameters=DEPLOY_SITE_SCHEMA,
         execute=execute,

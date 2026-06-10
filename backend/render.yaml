@@ -1,15 +1,28 @@
+databases:
+  - name: rpg-postgres
+    plan: starter
+    databaseName: rpg_agent
+    user: rpg_agent
+
 services:
+  - type: redis
+    name: rpg-redis
+    plan: starter
+    maxmemoryPolicy: allkeys-lru
+
   - type: web
     name: rpg-agent-api
     runtime: python
-    plan: free
+    plan: starter
     rootDir: backend
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 2
     healthCheckPath: /api/v1/health
     envVars:
       - key: APP_ENV
         value: production
+      - key: BACKEND_PUBLIC_URL
+        value: https://rpg-agent-api.onrender.com
       - key: AGENT_MODE
         value: auto
       - key: TOOLS_ENABLED
@@ -24,3 +37,12 @@ services:
         value: "150"
       - key: MISSION_REFUND_ON_FAIL_PERCENT
         value: "50"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: rpg-postgres
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: rpg-redis
+          property: connectionString

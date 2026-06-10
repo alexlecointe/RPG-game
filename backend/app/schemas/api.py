@@ -58,11 +58,14 @@ class CompanyOut(BaseModel):
     buildings: list[BuildingOut]
     render_url: Optional[str] = None
     site_url: Optional[str] = None
+    site_version: Optional[int] = None  # version number of the live site artifact
+    site_status: str = "not_created"  # not_created | publishing | live | failed
     stripe_connect_status: str = "not_started"  # not_started | pending | ready
     daily_ads_budget_cents: int = 0
     ads_wallet_balance_cents: int = 0
     auto_pilot: bool = False
     wallet: WalletOut
+    product_image_url: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

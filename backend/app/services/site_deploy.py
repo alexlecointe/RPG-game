@@ -9,12 +9,15 @@ logger = structlog.get_logger()
 
 
 def build_site_url(slug: str, render_url: str | None = None) -> str | None:
-    """Prefer branded subdomain if configured, else Render URL."""
+    """Prefer branded subdomain if configured, then stored render_url, then predictable Render fallback."""
     settings = get_settings()
     if settings.site_base_domain and slug:
         return f"https://{slug}.{settings.site_base_domain.strip('.')}"
     if render_url:
         return render_url if render_url.startswith("http") else f"https://{render_url}"
+    # Predictable Render URL: service named rpg-{slug} always gets this subdomain
+    if slug:
+        return f"https://rpg-{slug}.onrender.com"
     return None
 
 

@@ -122,15 +122,18 @@ class CompanyService:
         await self.db.flush()
         await self.db.refresh(company)
 
-        self._fire_and_forget_provision(company.slug or data.name, company.id)
+        # Shared gateway model: no per-company Render/Neon/GitHub provisioning by default.
+        # Infra is only provisioned when explicitly triggered via the admin API.
+        company.infra_status = "gateway"
 
         return company
 
     @staticmethod
     def _fire_and_forget_provision(slug: str, company_id: str) -> None:
-        """Provision infra (Neon + GitHub + Render) in background, like Polsia HEURE 0."""
+        """Provision dedicated infra (Neon + GitHub + Render) — premium/admin only."""
         from app.core.config import get_settings
         settings = get_settings()
+        # Requires explicit admin action; NOT called automatically on company creation.
         if not (settings.render_api_key and settings.github_token and settings.github_org):
             return
 
@@ -155,9 +158,24 @@ class CompanyService:
                             company.render_service_id = result["render"]["service_id"]
                         if result.get("url"):
                             company.render_url = result["url"]
+                        company.infra_status = "provisioned" if result.get("provisioned") else "failed"
                         await db.commit()
+                        logger.info(
+                            "infra_status_updated",
+                            company_id=company_id,
+                            status=company.infra_status,
+                        )
             except Exception as exc:
                 logger.warning("infra_provision_failed", company_id=company_id, error=str(exc))
+                try:
+                    from app.core.database import SessionLocal as _SL
+                    async with _SL() as _db:
+                        _c = await _db.get(Company, company_id)
+                        if _c:
+                            _c.infra_status = "failed"
+                            await _db.commit()
+                except Exception:
+                    pass
 
         try:
             asyncio.get_running_loop().create_task(_run())

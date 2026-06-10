@@ -2,6 +2,28 @@
 
 Applique les instructions generiques de landing_page, plus ces specificites app mobile :
 
+## Direction artistique App par categorie
+
+### Sante / Bien-etre / Fitness
+- Palette : vert, bleu marine, blanc, accent orange ou corail
+- Typo : rounded sans-serif (Poppins, Nunito)
+- Style : mockup iPhone avec ecrans de l'app, lifestyle humain
+
+### Finance / Productivite / Outils
+- Palette : bleu profond, violet, noir, accent or ou vert
+- Typo : Inter, DM Sans, Manrope
+- Style : mockup dashboard, data visualisations, UI propre
+
+### Lifestyle / Social / Contenu
+- Palette : gradient ou couleurs vives selon le public
+- Typo : friendly, accessible
+- Style : screenshots app, photos lifestyle, communaute
+
+## Mockup obligatoire
+- Creer un mockup iPhone en CSS (cadre + ecran) si pas d'asset disponible
+- Afficher 2-3 ecrans cles de l'app dans le hero
+- Le mockup est OBLIGATOIRE — c'est le premier trust signal d'une app
+
 ## Analyse supplementaire
 
 ### App Store presence

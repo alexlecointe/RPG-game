@@ -2,6 +2,27 @@
 
 Applique les instructions generiques de landing_page, plus ces specificites SaaS :
 
+## Direction artistique SaaS par segment
+
+### B2B / Enterprise / Productivite
+- Palette : bleu profond ou violet, fond blanc ou gris tres clair, accent vert ou turquoise
+- Typo : sans-serif professionnel (Inter, DM Sans, Plus Jakarta Sans)
+- Style visuel : UI screenshot en mockup, dashboard preview, icones lineaires
+- References : Linear, Notion, Loom, Vercel
+- Ton : efficacite, puissance, fiabilite, productivite
+
+### B2C / Consumer / Lifestyle SaaS
+- Palette : gradient pastel ou couleurs vives selon le marche
+- Typo : rounded sans-serif (Nunito, Poppins, Rubik)
+- Style visuel : illustration, emoji, screenshots mobile
+- References : Duolingo, Headspace, Superhuman, Superhuman
+- Ton : fun, accessible, benefice immediat
+
+## Hero visuel obligatoire
+- Generer ou utiliser un screenshot/mockup de l'interface si disponible
+- Sinon : illustration ou mockup generique avec les couleurs de la marque
+- Ne jamais laisser un hero sans visuel
+
 ## Analyse supplementaire
 
 ### Demo/Trial CTA
