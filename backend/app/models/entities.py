@@ -89,6 +89,8 @@ class Company(Base):
     render_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     neon_project_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     github_repo_url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    infra_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True, default="pending")
+    product_image_url: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
     stripe_connect_account_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     daily_ads_budget_cents: Mapped[int] = mapped_column(Integer, default=0)
     ads_wallet_balance_cents: Mapped[int] = mapped_column(Integer, default=0)
@@ -167,11 +169,11 @@ class Mission(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
     company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
-    agent_type: Mapped[AgentType] = mapped_column(Enum(AgentType, native_enum=False))
+    agent_type: Mapped[AgentType] = mapped_column(Enum(AgentType, native_enum=False, values_callable=lambda x: [e.value for e in x]))
     mission_type: Mapped[str] = mapped_column(String(64))
-    status: Mapped[MissionStatus] = mapped_column(Enum(MissionStatus, native_enum=False), default=MissionStatus.PENDING)
+    status: Mapped[MissionStatus] = mapped_column(Enum(MissionStatus, native_enum=False, values_callable=lambda x: [e.value for e in x]), default=MissionStatus.PENDING)
     source: Mapped[TaskSource] = mapped_column(
-        Enum(TaskSource, native_enum=False), default=TaskSource.USER
+        Enum(TaskSource, native_enum=False, values_callable=lambda x: [e.value for e in x]), default=TaskSource.USER
     )
     title: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -322,6 +324,35 @@ class CompanyEmail(Base):
     body: Mapped[str] = mapped_column(Text, default="")
     message_id: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    company: Mapped["Company"] = relationship()
+
+
+# ---------------------------------------------------------------------------
+# Site artifacts — shared gateway hosting (scalable, 1 gateway for all sites)
+# ---------------------------------------------------------------------------
+
+class SiteArtifact(Base):
+    """Published website version for a company.
+
+    Replaces per-company Render services. The shared gateway reads this table
+    by slug and serves the HTML directly.
+    """
+    __tablename__ = "site_artifacts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
+    slug: Mapped[str] = mapped_column(String(100), index=True)
+    html_content: Mapped[str] = mapped_column(Text)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    is_live: Mapped[bool] = mapped_column(Boolean, default=True)
+    mission_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("missions.id"), nullable=True, index=True
+    )
+    quality_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    published_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
 

@@ -469,6 +469,9 @@ struct RetroWebsiteSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var launchingStep: Int?
+    @State private var websiteLogs: [MissionLogEntry] = []
+    @State private var logPollingTask: Task<Void, Never>?
+    @State private var siteStatusPollingTask: Task<Void, Never>?
 
     private var company: Company? { appState.company }
     private var siteUrl: String? { company?.siteUrl }
@@ -482,14 +485,17 @@ struct RetroWebsiteSheet: View {
     }
 
     private var siteStatus: (label: String, color: Color) {
-        if let url = siteUrl, !url.isEmpty {
-            return ("LIVE ◉", Color.green)
-        } else if let step = websiteStep, step.isRunning {
-            return ("EN DÉPLOIEMENT ▶", Color.yellow)
-        } else if company?.slug != nil {
-            return ("EN ATTENTE ○", Color.white.opacity(0.4))
+        switch company?.siteStatus {
+        case "live":       return ("LIVE ◉", Color.green)
+        case "publishing": return ("EN COURS ▶", Color.yellow)
+        case "failed":     return ("ERREUR ✕", Color.red)
+        default:
+            // Fallback: infer from running quest step
+            if let step = websiteStep, step.isRunning {
+                return ("EN COURS ▶", Color.yellow)
+            }
+            return ("PAS ENCORE CRÉÉ ○", Color.white.opacity(0.4))
         }
-        return ("NON CONFIGURÉ", Color.white.opacity(0.25))
     }
 
     var body: some View {
@@ -526,6 +532,9 @@ struct RetroWebsiteSheet: View {
                         // Polsia URL section
                         urlSection
 
+                        // Product image section
+                        productImageSection
+
                         // Custom domains (placeholder)
                         customDomainsSection
                     }
@@ -560,48 +569,244 @@ struct RetroWebsiteSheet: View {
     }
 
     private func websiteRunningBanner(_ step: QuestStep) -> some View {
-        HStack(spacing: 10) {
-            ProgressView().tint(.white).scaleEffect(0.8)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("EN COURS — ÉTAPE \(step.stepNumber)").font(mono(9)).foregroundStyle(.white.opacity(0.5))
-                Text(step.title.uppercased()).font(mono(11)).foregroundStyle(.white)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                ProgressView().tint(.white).scaleEffect(0.75)
+                Text("EN COURS — GÉNÉRATION SITE WEB").font(mono(9)).foregroundStyle(.white.opacity(0.5))
+                Spacer()
             }
-            Spacer()
+
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(websiteGenerationSteps, id: \.key) { stage in
+                    let done = websiteLogs.contains { stage.matchSteps.contains($0.step) }
+                    let current = !done && websiteLogs.last.map { stage.matchSteps.contains($0.step) } ?? false
+                    HStack(spacing: 8) {
+                        if done {
+                            Text("✓").font(mono(9)).foregroundStyle(.white.opacity(0.7)).frame(width: 12)
+                        } else if current {
+                            ProgressView().tint(.white).scaleEffect(0.5).frame(width: 12)
+                        } else {
+                            Text("○").font(mono(9)).foregroundStyle(.white.opacity(0.2)).frame(width: 12)
+                        }
+                        Text(stage.label)
+                            .font(mono(9))
+                            .foregroundStyle(done ? .white.opacity(0.7) : current ? .white : .white.opacity(0.25))
+                    }
+                }
+            }
+
+            if let lastLog = websiteLogs.last {
+                Text(lastLog.message.prefix(60))
+                    .font(mono(8))
+                    .foregroundStyle(.white.opacity(0.35))
+                    .lineLimit(1)
+            }
         }
         .padding(12)
         .background(Color.black)
         .overlay(Rectangle().stroke(.white.opacity(0.5), lineWidth: 1))
+        .onAppear { startLogPolling(step) }
+        .onDisappear {
+            logPollingTask?.cancel()
+            siteStatusPollingTask?.cancel()
+        }
     }
 
-    // MARK: - URL section (Polsia-style)
+    private struct WebsiteStage {
+        let key: String
+        let label: String
+        let matchSteps: [String]
+    }
 
-    private var urlSection: some View {
-        retroSection("URL POLSIA") {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 10) {
-                    Text(displayUrl)
-                        .font(mono(11)).foregroundStyle(.white.opacity(0.8))
-                        .lineLimit(1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if let url = URL(string: displayUrl.hasPrefix("http") ? displayUrl : "https://\(displayUrl)") {
-                        Button(action: { UIApplication.shared.open(url) }) {
-                            Text("OUVRIR")
-                                .font(mono(9)).foregroundStyle(.black)
-                                .padding(.horizontal, 10).padding(.vertical, 6)
-                                .background(Color.white)
-                        }
+    private var websiteGenerationSteps: [WebsiteStage] { [
+        WebsiteStage(key: "brief",    label: "DIRECTION CRÉATIVE",      matchSteps: ["website_brief", "website_brief_ready"]),
+        WebsiteStage(key: "context",  label: "CONTEXTE & MARCHÉ",       matchSteps: ["context_loaded", "memory_loaded"]),
+        WebsiteStage(key: "image",    label: "IMAGE PRODUIT",           matchSteps: ["product_image", "product_image_generating", "product_image_ready", "product_image_missing", "product_image_failed"]),
+        WebsiteStage(key: "build",    label: "CONSTRUCTION DU SITE",    matchSteps: ["agent_call", "deliverable_ready"]),
+        WebsiteStage(key: "quality",  label: "VÉRIFICATION QUALITÉ",    matchSteps: ["quality_check"]),
+        WebsiteStage(key: "deploy",   label: "DÉPLOIEMENT",             matchSteps: ["site_deployed"]),
+    ] }
+
+    private func startLogPolling(_ step: QuestStep) {
+        guard let missionId = step.missionId else { return }
+        logPollingTask?.cancel()
+        logPollingTask = Task {
+            while !Task.isCancelled {
+                if let logs = try? await APIClient.shared.fetchMissionLogs(missionId: missionId) {
+                    await MainActor.run { websiteLogs = logs }
+                }
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+            }
+        }
+        // Also poll site_status so the UI refreshes automatically when the site goes live
+        startSiteStatusPolling()
+    }
+
+    private func startSiteStatusPolling() {
+        guard let slug = company?.slug else { return }
+        siteStatusPollingTask?.cancel()
+        siteStatusPollingTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard !Task.isCancelled else { break }
+                if let status = try? await APIClient.shared.fetchSiteStatus(slug: slug) {
+                    if status.live {
+                        await appState.refreshCompany()
+                        break
                     }
                 }
-                Button(action: {
-                    UIPasteboard.general.string = displayUrl
-                }) {
-                    Text("COPIER L'URL")
-                        .font(mono(10)).foregroundStyle(.white)
-                        .frame(maxWidth: .infinity).padding(.vertical, 9)
-                        .overlay(Rectangle().stroke(.white.opacity(0.4), lineWidth: 1))
+            }
+        }
+    }
+
+    // MARK: - URL section (shared gateway)
+
+    private var urlSection: some View {
+        let version = company?.siteVersion
+        let sectionTitle = "SITE WEB" + (version != nil ? " — v\(version!)" : "")
+        return retroSection(sectionTitle) {
+            VStack(alignment: .leading, spacing: 10) {
+                if siteUrl != nil {
+                    HStack(spacing: 10) {
+                        Text(displayUrl)
+                            .font(mono(11)).foregroundStyle(.white.opacity(0.8))
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if let url = URL(string: displayUrl.hasPrefix("http") ? displayUrl : "https://\(displayUrl)") {
+                            Button(action: { UIApplication.shared.open(url) }) {
+                                Text("OUVRIR")
+                                    .font(mono(9)).foregroundStyle(.black)
+                                    .padding(.horizontal, 10).padding(.vertical, 6)
+                                    .background(Color.white)
+                            }
+                        }
+                    }
+                    Button(action: {
+                        UIPasteboard.general.string = displayUrl
+                    }) {
+                        Text("COPIER L'URL")
+                            .font(mono(10)).foregroundStyle(.white)
+                            .frame(maxWidth: .infinity).padding(.vertical, 9)
+                            .overlay(Rectangle().stroke(.white.opacity(0.4), lineWidth: 1))
+                    }
+                } else {
+                    Text("Site pas encore créé.")
+                        .font(mono(10)).foregroundStyle(.white.opacity(0.4))
+                    Text("Lance la mission 'Créer le site' depuis l'onglet Quêtes.")
+                        .font(mono(9)).foregroundStyle(.white.opacity(0.25))
                 }
             }
             .padding(12)
+        }
+    }
+
+    // MARK: - Product image section
+
+    @State private var showProductImageFullscreen = false
+
+    private var productImageSection: some View {
+        let imageUrl = company?.productImageUrl
+        let websiteIsRunning = websiteStep?.isRunning ?? false
+
+        return retroSection("IMAGE PRODUIT") {
+            VStack(spacing: 0) {
+                if websiteIsRunning && imageUrl == nil {
+                    // Generating state
+                    HStack(spacing: 8) {
+                        ProgressView().tint(.white).scaleEffect(0.65)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("GÉNÉRATION EN COURS...")
+                                .font(mono(10)).foregroundStyle(.white.opacity(0.6))
+                            Text("L'image produit est en train d'être créée.")
+                                .font(mono(8)).foregroundStyle(.white.opacity(0.3))
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+                } else if let urlStr = imageUrl, let url = URL(string: urlStr) {
+                    // Generated — show thumbnail
+                    Button(action: { showProductImageFullscreen = true }) {
+                        HStack(spacing: 12) {
+                            AsyncImage(url: url) { phase in
+                                switch phase {
+                                case .success(let img):
+                                    img.resizable().scaledToFill()
+                                        .frame(width: 56, height: 56)
+                                        .clipped()
+                                        .overlay(Rectangle().stroke(.white.opacity(0.2), lineWidth: 1))
+                                case .failure:
+                                    Rectangle().foregroundStyle(.white.opacity(0.05))
+                                        .frame(width: 56, height: 56)
+                                        .overlay(Text("?").font(mono(16)).foregroundStyle(.white.opacity(0.3)))
+                                default:
+                                    Rectangle().foregroundStyle(.white.opacity(0.05))
+                                        .frame(width: 56, height: 56)
+                                        .overlay(ProgressView().tint(.white).scaleEffect(0.6))
+                                }
+                            }
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("IMAGE GÉNÉRÉE ◉")
+                                    .font(mono(10)).foregroundStyle(.white)
+                                Text("Tap pour voir en plein écran")
+                                    .font(mono(8)).foregroundStyle(.white.opacity(0.35))
+                            }
+                            Spacer()
+                            Text("▸").font(mono(12)).foregroundStyle(.white.opacity(0.4))
+                        }
+                        .padding(12)
+                    }
+                    .buttonStyle(.plain)
+                    .sheet(isPresented: $showProductImageFullscreen) {
+                        productImageFullscreen(url: url)
+                    }
+                } else {
+                    // Not generated
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("IMAGE NON GÉNÉRÉE ○")
+                                .font(mono(10)).foregroundStyle(.white.opacity(0.4))
+                            Text("Le site a quand même été créé. Génère l'image depuis le Sage.")
+                                .font(mono(8)).foregroundStyle(.white.opacity(0.25))
+                        }
+                        Spacer()
+                    }
+                    .padding(12)
+                }
+            }
+        }
+    }
+
+    private func productImageFullscreen(url: URL) -> some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            VStack(spacing: 0) {
+                HStack {
+                    Button(action: { showProductImageFullscreen = false }) {
+                        Text("FERMER").font(mono(10)).foregroundStyle(.white)
+                            .padding(.horizontal, 14).padding(.vertical, 8)
+                            .overlay(Rectangle().stroke(.white.opacity(0.4), lineWidth: 1))
+                    }
+                    Spacer()
+                    ShareLink(item: url) {
+                        Text("PARTAGER").font(mono(10)).foregroundStyle(.white)
+                            .padding(.horizontal, 14).padding(.vertical, 8)
+                            .overlay(Rectangle().stroke(.white.opacity(0.4), lineWidth: 1))
+                    }
+                }
+                .padding(14)
+                Spacer()
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let img):
+                        img.resizable().scaledToFit()
+                            .padding(14)
+                    default:
+                        ProgressView().tint(.white)
+                    }
+                }
+                Spacer()
+                Text("IMAGE PRODUIT").font(mono(8)).foregroundStyle(.white.opacity(0.25)).padding(.bottom, 24)
+            }
         }
     }
 
@@ -665,15 +870,24 @@ struct RetroDocsSheet: View {
     let filterAgent: String?   // nil = show all; "researcher" = filter to research docs
 
     @State private var expandedDocId: String?
+    @State private var showProductImage = false
 
     private var allDocs: [Mission] {
-        let base = appState.missions.filter { $0.isCompleted && $0.deliverable != nil }
+        // Landing page HTML is accessible via the Website sheet — don't pollute DOCS
+        let base = appState.missions.filter {
+            $0.isCompleted && $0.deliverable != nil && $0.missionType != "landing_page"
+        }
         if let agent = filterAgent {
             let related = Set(VillageMap.polisiaAgentTypes(for: agent))
             return base.filter { related.contains($0.agentType) }
                        .sorted { ($0.createdAt ?? "") > ($1.createdAt ?? "") }
         }
         return base.sorted { ($0.createdAt ?? "") > ($1.createdAt ?? "") }
+    }
+
+    private var productImageUrl: URL? {
+        guard filterAgent == nil, let str = appState.company?.productImageUrl, !str.isEmpty else { return nil }
+        return URL(string: str)
     }
 
     private var title: String { filterAgent == nil ? "DOCS" : "RESEARCH" }
@@ -700,7 +914,8 @@ struct RetroDocsSheet: View {
                                     Text("DOSSIER ENTREPRISE")
                                         .font(mono(11)).foregroundStyle(.white)
                                     Spacer()
-                                    Text("\(allDocs.count) doc\(allDocs.count != 1 ? "s" : "")")
+                                    let totalCount = allDocs.count + (productImageUrl != nil ? 1 : 0)
+                                    Text("\(totalCount) doc\(totalCount != 1 ? "s" : "")")
                                         .font(mono(9)).foregroundStyle(.white.opacity(0.4))
                                 }
                                 GeometryReader { geo in
@@ -723,6 +938,11 @@ struct RetroDocsSheet: View {
                             .padding(.horizontal, 14).padding(.top, 14).padding(.bottom, 10)
 
                             LazyVStack(spacing: 0) {
+                                // Product image card (pinned at top when available)
+                                if let url = productImageUrl {
+                                    productImageDocRow(url: url)
+                                    Rectangle().frame(height: 1).foregroundStyle(.white.opacity(0.1))
+                                }
                                 ForEach(allDocs) { mission in
                                     documentRow(mission)
                                     Rectangle().frame(height: 1).foregroundStyle(.white.opacity(0.1))
@@ -734,6 +954,68 @@ struct RetroDocsSheet: View {
                             .padding(.bottom, 24)
                         }
                     }
+                }
+            }
+        }
+    }
+
+    private func productImageDocRow(url: URL) -> some View {
+        Button(action: { showProductImage = true }) {
+            HStack(spacing: 10) {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .success(let img):
+                        img.resizable().scaledToFill()
+                            .frame(width: 40, height: 40).clipped()
+                            .overlay(Rectangle().stroke(.white.opacity(0.2), lineWidth: 1))
+                    default:
+                        Rectangle().foregroundStyle(.white.opacity(0.05))
+                            .frame(width: 40, height: 40)
+                            .overlay(ProgressView().tint(.white).scaleEffect(0.5))
+                    }
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("IMAGE PRODUIT")
+                        .font(mono(11)).foregroundStyle(.white)
+                    HStack(spacing: 6) {
+                        Text("BUILDER").font(mono(8)).foregroundStyle(.white.opacity(0.4))
+                        Text("IMAGE").font(mono(8)).foregroundStyle(.white.opacity(0.4))
+                    }
+                }
+                Spacer()
+                Text("▸").font(mono(12)).foregroundStyle(.white.opacity(0.4))
+            }
+            .padding(.horizontal, 12).padding(.vertical, 10)
+        }
+        .buttonStyle(.plain)
+        .sheet(isPresented: $showProductImage) {
+            ZStack {
+                Color.black.ignoresSafeArea()
+                VStack(spacing: 0) {
+                    HStack {
+                        Button(action: { showProductImage = false }) {
+                            Text("FERMER").font(mono(10)).foregroundStyle(.white)
+                                .padding(.horizontal, 14).padding(.vertical, 8)
+                                .overlay(Rectangle().stroke(.white.opacity(0.4), lineWidth: 1))
+                        }
+                        Spacer()
+                        ShareLink(item: url) {
+                            Text("PARTAGER").font(mono(10)).foregroundStyle(.white)
+                                .padding(.horizontal, 14).padding(.vertical, 8)
+                                .overlay(Rectangle().stroke(.white.opacity(0.4), lineWidth: 1))
+                        }
+                    }
+                    .padding(14)
+                    Spacer()
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .success(let img): img.resizable().scaledToFit().padding(14)
+                        default: ProgressView().tint(.white)
+                        }
+                    }
+                    Spacer()
+                    Text("IMAGE PRODUIT GÉNÉRÉE PAR L'IA")
+                        .font(mono(8)).foregroundStyle(.white.opacity(0.25)).padding(.bottom, 24)
                 }
             }
         }
@@ -865,7 +1147,6 @@ struct RetroBusinessSheet: View {
 
                         businessOverviewSection
                         stripeSection
-                        walletSection
 
                         if stripeOk {
                             ordersSection
@@ -935,9 +1216,9 @@ struct RetroBusinessSheet: View {
             HStack(spacing: 0) {
                 infoCell(label: "TYPE", value: company?.businessType.displayName.uppercased() ?? "—")
                 divider
-                infoCell(label: "NIVEAU", value: "LV.\(company?.level ?? 1)")
+                infoCell(label: "VISITEURS", value: "—")
                 divider
-                infoCell(label: "XP", value: "\(company?.xp ?? 0)")
+                infoCell(label: "REVENUS", value: orders?.totalRevenueDisplay ?? "$0")
             }
         }
     }
@@ -984,19 +1265,6 @@ struct RetroBusinessSheet: View {
         }
     }
 
-    private var walletSection: some View {
-        retroSection("CRÉDITS & WALLET") {
-            HStack(spacing: 0) {
-                if let wallet = company?.wallet {
-                    infoCell(label: "SOLDE", value: "CR \(wallet.creditsBalance)")
-                    divider
-                    infoCell(label: "CAP", value: "CR \(wallet.creditsCap)")
-                    divider
-                    infoCell(label: "FREE/JOUR", value: "CR \(wallet.dailyFreeCredits)")
-                }
-            }
-        }
-    }
 
     private func infoCell(label: String, value: String) -> some View {
         VStack(spacing: 3) {
@@ -1152,6 +1420,9 @@ struct DebugMenuSheet: View {
     @State private var resetDone = false
     @State private var creditsAdded = false
     @State private var addingCredits = false
+    @State private var deleteResetting = false
+    @State private var deleteResetDone = false
+    @State private var showDeleteConfirm = false
 
     var body: some View {
         ZStack {
@@ -1231,6 +1502,50 @@ struct DebugMenuSheet: View {
                                 .foregroundStyle(resetDone ? .green : .red.opacity(0.8))
                                 .padding(10)
                                 .overlay(Rectangle().stroke(.white.opacity(0.2), lineWidth: 1))
+                            }
+
+                            // DELETE & RESET — supprime la company en DB + infra + reset local
+                            Button(action: { showDeleteConfirm = true }) {
+                                HStack {
+                                    if deleteResetting { ProgressView().tint(.white).scaleEffect(0.7) }
+                                    Text(deleteResetDone ? "✓ COMPANY SUPPRIMÉE" : "💣 DELETE COMPANY & RESET")
+                                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                    Spacer()
+                                }
+                                .foregroundStyle(deleteResetDone ? .green : .orange)
+                                .padding(10)
+                                .overlay(Rectangle().stroke(.orange.opacity(0.4), lineWidth: 1))
+                            }
+                            .disabled(deleteResetting || appState.company == nil)
+                            .confirmationDialog(
+                                "Supprimer la company ?",
+                                isPresented: $showDeleteConfirm,
+                                titleVisibility: .visible
+                            ) {
+                                Button("Supprimer + Reset", role: .destructive) {
+                                    guard let companyId = appState.company?.id else { return }
+                                    deleteResetting = true
+                                    Task {
+                                        try? await APIClient.shared.deleteCompany(companyId: companyId)
+                                        await MainActor.run {
+                                            // Clear local state
+                                            UserDefaults.standard.removeObject(forKey: "rpg_user_id")
+                                            UserDefaults.standard.removeObject(forKey: "rpg_company_id")
+                                            UserDefaults.standard.removeObject(forKey: "hasCompletedOnboarding")
+                                            // Reset AppState
+                                            appState.company = nil
+                                            appState.hasCompletedOnboarding = false
+                                            appState.missions = []
+                                            appState.questChain = []
+                                            deleteResetting = false
+                                            deleteResetDone = true
+                                            dismiss()
+                                        }
+                                    }
+                                }
+                                Button("Annuler", role: .cancel) {}
+                            } message: {
+                                Text("La company, ses missions, son site et son infra seront définitivement supprimés. Cette action est irréversible.")
                             }
                         }
                     }

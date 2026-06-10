@@ -203,6 +203,8 @@ def _build_user_prompt(
     chain_context: list[dict] | None = None,
     memory_context: list[dict] | None = None,
     competitor_url: str = "",
+    website_brief: str = "",
+    product_image_url: str = "",
 ) -> str:
     parts = [
         f'Company: "{company_name}"',
@@ -212,6 +214,18 @@ def _build_user_prompt(
         f"Audience cible: {target_audience}" if target_audience else "",
         f"URL concurrent a analyser: {competitor_url}" if competitor_url else "",
     ]
+
+    if website_brief:
+        parts.append(f"\n--- BRIEF CREATIF WEBSITE ---\n{website_brief}\n--- FIN BRIEF ---")
+
+    if product_image_url:
+        parts.append(
+            f"\n--- IMAGE PRODUIT PRÉ-GÉNÉRÉE ---\n"
+            f"URL: {product_image_url}\n"
+            f"OBLIGATOIRE: intègre cette URL directement dans le HTML via <img src=\"{product_image_url}\" alt=\"{company_name}\">.\n"
+            "Place-la dans la section hero ET dans la section produit. Ne génère PAS d'autre image produit.\n"
+            "--- FIN IMAGE PRODUIT ---"
+        )
 
     if memory_context:
         parts.append("\n--- MEMOIRE DE L'ENTREPRISE ---")
@@ -282,6 +296,8 @@ async def execute_agent(
     company_id: str = "",
     company_slug: str = "default",
     competitor_url: str = "",
+    website_brief: str = "",
+    product_image_url: str = "",
 ) -> AgentResult:
     settings = get_settings()
     catalog = MISSION_CATALOG.get(mission_type)
@@ -317,6 +333,8 @@ async def execute_agent(
         chain_context=chain_context,
         memory_context=memory_context,
         competitor_url=competitor_url,
+        website_brief=website_brief,
+        product_image_url=product_image_url,
     )
 
     if quality_feedback:
@@ -459,8 +477,10 @@ async def _call_anthropic(
     registry = tool_registry if (tool_registry and tools) else (get_tool_registry() if tools else None)
 
     for iteration in range(max_iterations + 1):
+        # Landing pages need more tokens to generate full HTML; final iteration never uses tools
+        _max_tok = 8192 if (api_tools and iteration == max_iterations) else 4096
         response, latency = await call_anthropic_raw(
-            system_prompt, messages, max_tokens=4096,
+            system_prompt, messages, max_tokens=_max_tok,
             tools=api_tools or None, timeout_s=COMPLEX_TIMEOUT_S,
         )
 

@@ -215,6 +215,89 @@ async def _run_mission_inner(mission_id: str) -> None:
             best_result = None
             best_score = 0
 
+            # For landing_page missions: infra check, creative brief, product image pre-generation
+            website_brief = ""
+            product_image_url = ""
+            if mission.mission_type == "landing_page":
+                # --- 1. Vérifier que l'infra est prête (uniquement si provisioning dédié) ---
+                if company.infra_status not in ("gateway", "provisioned"):
+                    if log_step:
+                        await log_step("infra_check", "Vérification infra (GitHub + Render)...")
+                    infra_ready = await _wait_for_infra(company, log_step)
+                    if not infra_ready and log_step:
+                        await log_step(
+                            "infra_warning",
+                            "Infra non prête — déploiement via gateway partagé",
+                        )
+
+                # --- 2. Brief créatif ---
+                if log_step:
+                    await log_step("website_brief", "Analyse du business et direction créative...")
+                market_scan_deliverable = ""
+                stripe_checkout_url = ""
+                if chain_context:
+                    import re as _re
+                    for ctx in chain_context:
+                        if ctx.get("mission_type") == "market_scan":
+                            market_scan_deliverable = ctx.get("deliverable", "")[:1200]
+                        if ctx.get("mission_type") == "payment_setup":
+                            _ps = ctx.get("deliverable", "")
+                            _m = _re.search(r"https://buy\.stripe\.com/[^\s\"'>\)]+", _ps)
+                            if _m:
+                                stripe_checkout_url = _m.group(0)
+                website_brief = await _generate_website_brief(
+                    company_name=company.name,
+                    mission_statement=company.mission_statement,
+                    product_description=company.product_description or "",
+                    target_audience=company.target_audience or "",
+                    business_type=company.business_type.value,
+                    market_scan=market_scan_deliverable,
+                    stripe_checkout_url=stripe_checkout_url,
+                )
+
+                # --- 6. Stocker le brief comme memory ---
+                if website_brief:
+                    from app.services.memory import MemoryService as _MS
+                    _mem = _MS(db)
+                    await _mem.store(
+                        company.id, "brand", "website_brief", website_brief, mission.id
+                    )
+                    if log_step:
+                        await log_step("website_brief_ready", "Brief créatif prêt — palette, vibe, image produit")
+
+                # --- 3. Pré-générer l'image produit ---
+                from app.core.config import get_settings as _get_settings
+                _settings = _get_settings()
+                if not _settings.replicate_api_token:
+                    if log_step:
+                        await log_step(
+                            "product_image_missing",
+                            "⚠️ Image produit non générée — REPLICATE_API_TOKEN absent. "
+                            "Le site sera créé sans image produit. Tu pourras en générer une plus tard.",
+                        )
+                else:
+                    if log_step:
+                        await log_step("product_image", "Génération de l'image produit...")
+                    product_image_url = await _pregenerate_product_image(
+                        company.id, website_brief, company.name, log_step
+                    )
+                    if not product_image_url and log_step:
+                        await log_step(
+                            "product_image_failed",
+                            "⚠️ Génération image produit échouée — site créé sans image. "
+                            "Tu pourras en générer une plus tard depuis la fiche Website.",
+                        )
+                    elif product_image_url:
+                        # Persist as CompanyAsset so it appears in Documents
+                        await _store_product_image_asset(db, company.id, product_image_url, mission.id)
+                        # Save on company for API exposure
+                        async with SessionLocal() as _upd:
+                            from app.models.entities import Company as _Co
+                            _c = await _upd.get(_Co, company.id)
+                            if _c:
+                                _c.product_image_url = product_image_url
+                                await _upd.commit()
+
             while quality_retry <= MAX_QUALITY_RETRIES:
                 agent_result = await execute_agent(
                     mission.agent_type,
@@ -231,6 +314,8 @@ async def _run_mission_inner(mission_id: str) -> None:
                     company_id=company.id,
                     company_slug=company.slug or "default",
                     competitor_url=company.competitor_url or "",
+                    website_brief=website_brief,
+                    product_image_url=product_image_url,
                 )
                 if agent_result.tool_calls and log_step:
                     for tc in agent_result.tool_calls:
@@ -238,6 +323,55 @@ async def _run_mission_inner(mission_id: str) -> None:
                             "tool_used",
                             f"Outil {tc['tool']} utilise — {tc.get('result', '')[:100]}",
                         )
+
+                # Landing page vide = l'agent n'a pas généré de HTML → forcer le retry
+                if mission.mission_type == "landing_page" and not (agent_result.content or "").strip():
+                    if log_step:
+                        await log_step(
+                            "html_empty",
+                            "⚠️ HTML vide — l'agent n'a pas généré de contenu. Relance forcée.",
+                        )
+                    feedback_addendum = (
+                        "ERREUR CRITIQUE : Tu n'as PAS généré de HTML. "
+                        "Tu DOIS générer le HTML complet (<!DOCTYPE html>...jusqu'à</html>) "
+                        "et appeler deploy_site. "
+                        "Si generate_image échoue, utilise un placeholder CSS — ne t'arrête JAMAIS sans HTML."
+                    )
+                    quality_retry += 1
+                    if quality_retry <= MAX_QUALITY_RETRIES:
+                        if log_step:
+                            await log_step(
+                                "quality_retry",
+                                f"HTML vide — relance forcée {quality_retry}/{MAX_QUALITY_RETRIES}",
+                            )
+                        continue
+                    else:
+                        break
+
+                # Pre-validation HTML structurelle — alimente le feedback mais ne bypass pas le scorer
+                if mission.mission_type == "landing_page":
+                    html_issues = _validate_landing_html(
+                        agent_result.content,
+                        product_image_url=product_image_url,
+                        business_type=company.business_type.value,
+                    )
+                    if html_issues:
+                        if log_step:
+                            await log_step(
+                                "html_validation",
+                                f"{len(html_issues)} problème(s) structurel(s) détecté(s) dans le HTML",
+                            )
+                        # Injecter dans le feedback_addendum pour le prochain retry
+                        html_feedback = (
+                            "PROBLÈMES STRUCTURELS DANS LE HTML (OBLIGATOIRES À CORRIGER):\n"
+                            + "\n".join(f"- {issue}" for issue in html_issues)
+                        )
+                        feedback_addendum = (
+                            (feedback_addendum + "\n\n" if feedback_addendum else "")
+                            + html_feedback
+                        )
+                    elif log_step:
+                        await log_step("html_validation", "HTML structurel validé")
 
                 score, feedback = await score_deliverable(
                     mission.mission_type,
@@ -300,33 +434,41 @@ async def _run_mission_inner(mission_id: str) -> None:
             deliverable_format = agent_result.format
 
             if mission.mission_type == "landing_page" and agent_result.content:
-                from app.services.site_deploy import build_site_url, deploy_landing_html
-                import json as _json
+                from sqlalchemy import select as _sa_sel
+                from app.models.entities import SiteArtifact as _SA
+                from app.services.site_hosting import build_gateway_url, publish_site
 
-                # Skip runner-side deploy if the agent already called deploy_site successfully
-                agent_already_deployed = any(
-                    tc.get("tool") == "deploy_site"
-                    and _json.loads(tc.get("result", "{}") or "{}").get("deployed")
-                    for tc in (agent_result.tool_calls or [])
+                slug = company.slug or ""
+
+                # If the agent already called deploy_site for this mission, skip republication
+                _existing = await db.execute(
+                    _sa_sel(_SA)
+                    .where(_SA.mission_id == mission.id, _SA.is_live == True)
+                    .limit(1)
                 )
+                _already_published = _existing.scalar_one_or_none()
 
-                if agent_already_deployed:
-                    site_url = build_site_url(company.slug or "", company.render_url)
+                if _already_published:
+                    artifact = _already_published
                     if log_step:
-                        await log_step("site_deployed", f"Site deploye par l'agent : {site_url or 'en cours'}")
+                        await log_step("site_deployed", f"Site déjà publié par l'agent (v{artifact.version})")
                 else:
-                    deploy_result = await deploy_landing_html(
-                        company.slug or company.name,
-                        agent_result.content,
-                        company.slug or "site",
-                        company.render_service_id,
-                    )
-                    site_url = deploy_result.get("site_url") or build_site_url(
-                        company.slug or "", company.render_url
+                    artifact = await publish_site(
+                        db,
+                        company_id=company.id,
+                        slug=slug,
+                        html_content=agent_result.content,
+                        mission_id=mission.id,
+                        quality_score=float(best_score) if best_score else None,
                     )
                     if log_step:
-                        await log_step("site_deployed", f"Site deploye : {site_url or 'en cours'}")
+                        site_url_log = build_gateway_url(slug)
+                        await log_step(
+                            "site_deployed",
+                            f"Site publié (v{artifact.version}) : {site_url_log or slug}",
+                        )
 
+                site_url = build_gateway_url(slug)
                 if site_url:
                     deliverable_content = (
                         f"{agent_result.content}\n\n---\n\n"
@@ -388,6 +530,276 @@ async def _run_mission_inner(mission_id: str) -> None:
 
             # Polsia retry loop: CEO proposes a new retry task after failure
             await _propose_retry_task(db, mission, company, str(exc))
+
+
+async def _store_product_image_asset(db, company_id: str, image_url: str, mission_id: str) -> None:
+    """Persist product image as a CompanyAsset so it appears in Documents/gallery."""
+    try:
+        from app.models.entities import CompanyAsset
+        existing = await db.execute(
+            __import__("sqlalchemy", fromlist=["select"]).select(CompanyAsset).where(
+                CompanyAsset.company_id == company_id,
+                CompanyAsset.asset_type == "product_image",
+            )
+        )
+        if existing.scalars().first():
+            return  # already stored
+        asset = CompanyAsset(
+            company_id=company_id,
+            filename="product_image.webp",
+            asset_type="product_image",
+            storage_key=f"{company_id}/product_image/product_image.webp",
+            public_url=image_url,
+            size_bytes=0,
+        )
+        db.add(asset)
+        await db.commit()
+        logger.info("product_image_asset_stored", company_id=company_id, url=image_url[:60])
+    except Exception as exc:
+        logger.warning("product_image_asset_store_failed", company_id=company_id, error=str(exc))
+
+
+async def _wait_for_infra(company, log_step, max_wait: int = 90) -> bool:
+    """Poll company.infra_status until provisioned or timeout.
+
+    Returns True if infra is ready, False if timeout or failed.
+    Attempts re-provisioning if status is 'failed'.
+    """
+    from app.core.database import SessionLocal
+    from app.models.entities import Company as _Company
+
+    if company.infra_status == "provisioned":
+        return True
+
+    if company.infra_status == "failed":
+        # Attempt re-provisioning
+        if log_step:
+            await log_step("infra_reprovision", "Infra en échec — nouvelle tentative de provisioning...")
+        try:
+            from app.services.infra import InfraService
+            infra = InfraService()
+            result = await infra.provision_company(company.slug or company.name)
+            async with SessionLocal() as db:
+                _c = await db.get(_Company, company.id)
+                if _c:
+                    if result.get("neon", {}).get("project_id"):
+                        _c.neon_project_id = result["neon"]["project_id"]
+                    if result.get("github", {}).get("repo_url"):
+                        _c.github_repo_url = result["github"]["repo_url"]
+                    if result.get("render", {}).get("service_id"):
+                        _c.render_service_id = result["render"]["service_id"]
+                    if result.get("url"):
+                        _c.render_url = result["url"]
+                    _c.infra_status = "provisioned" if result.get("provisioned") else "failed"
+                    await db.commit()
+            return result.get("provisioned", False)
+        except Exception as exc:
+            logger.warning("infra_reprovision_failed", company_id=company.id, error=str(exc))
+            return False
+
+    # Status is 'pending' — wait for background provisioning to complete
+    elapsed = 0
+    poll_interval = 5
+    while elapsed < max_wait:
+        await asyncio.sleep(poll_interval)
+        elapsed += poll_interval
+        async with SessionLocal() as db:
+            _c = await db.get(_Company, company.id)
+            if _c and _c.infra_status == "provisioned":
+                # Refresh caller's company object
+                company.render_service_id = _c.render_service_id
+                company.render_url = _c.render_url
+                company.github_repo_url = _c.github_repo_url
+                return True
+            if _c and _c.infra_status == "failed":
+                return False
+        if log_step:
+            await log_step("infra_waiting", f"Attente infra... ({elapsed}s/{max_wait}s)")
+
+    return False
+
+
+async def _pregenerate_product_image(
+    company_id: str,
+    website_brief: str,
+    company_name: str,
+    log_step,
+) -> str:
+    """Pre-generate the product image from the brief's image section before the Builder runs.
+
+    Extracts the image brief from section 3 of the website_brief and calls Replicate directly.
+    Returns the image URL or empty string on failure.
+    """
+    import re as _re
+    from app.agents.tools.generate_image import _execute_generate_image
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    if not settings.replicate_api_token:
+        return ""
+
+    # Extract image prompt from brief section 3
+    image_prompt = ""
+    section_match = _re.search(
+        r"(?:3\.|##\s*3|BRIEF IMAGE PRODUIT|IMAGE PRODUIT)[^\n]*\n([\s\S]{30,400}?)(?=\n(?:4\.|##\s*4|STRUCTURE|CTA)|$)",
+        website_brief,
+        _re.IGNORECASE,
+    )
+    if section_match:
+        image_prompt = section_match.group(1).strip()
+        # Remove markdown bullet points and clean up
+        image_prompt = _re.sub(r"^[-*•]\s*", "", image_prompt, flags=_re.MULTILINE)
+        image_prompt = " ".join(image_prompt.split())[:400]
+
+    if not image_prompt:
+        image_prompt = (
+            f"Professional product photo for {company_name}. "
+            "Studio lighting, white background, premium brand aesthetic, "
+            "high-end commercial photography style."
+        )
+
+    try:
+        if log_step:
+            await log_step("product_image_generating", f"Génération image produit : {image_prompt[:80]}...")
+        result_json = await _execute_generate_image(
+            settings.replicate_api_token,
+            image_prompt,
+            width=1024,
+            height=1024,
+        )
+        import json as _json
+        result = _json.loads(result_json)
+        url = result.get("image_url", "")
+        if url and log_step:
+            await log_step("product_image_ready", f"Image produit générée : {url[:60]}...")
+        return url
+    except Exception as exc:
+        logger.warning("product_image_pregeneration_failed", company_id=company_id, error=str(exc))
+        return ""
+
+
+def _validate_landing_html(html: str, product_image_url: str = "", business_type: str = "ecommerce") -> list[str]:
+    """Structural pre-validation of landing page HTML before LLM scoring.
+
+    Returns a list of issues to fix. Empty list = HTML passes validation.
+    """
+    issues: list[str] = []
+    if not html:
+        return ["HTML vide ou manquant"]
+
+    h = html.lower()
+
+    # Structure de base
+    if "<!doctype" not in h and "<html" not in h:
+        issues.append("DOCTYPE ou balise <html> manquante")
+    if "</html>" not in h:
+        issues.append("Balise </html> fermante manquante")
+    if "<head" not in h or "<body" not in h:
+        issues.append("Structure <head>/<body> incomplète")
+
+    # Responsive
+    if "viewport" not in h:
+        issues.append("Meta viewport manquante (site non responsive)")
+
+    # Image produit
+    if product_image_url and product_image_url not in html:
+        issues.append(f"Image produit pré-générée non intégrée ({product_image_url[:50]}...)")
+    elif "<img" not in h:
+        issues.append("Aucune image dans le HTML — section visuelle manquante")
+
+    # Sections obligatoires
+    import re as _re
+    section_count = len(_re.findall(r"<(section|div)[^>]*(?:class|id)[^>]*>", html, _re.IGNORECASE))
+    if section_count < 3:
+        issues.append(f"Trop peu de sections ({section_count}) — minimum 3 attendues")
+
+    # CTA / bouton d'achat
+    has_cta = any(kw in h for kw in ["<button", "<a ", "href=", "cta", "acheter", "buy", "order", "commander"])
+    if not has_cta:
+        issues.append("Aucun CTA/bouton d'achat détecté")
+
+    # Pas de waitlist pour ecommerce
+    if business_type == "ecommerce":
+        if any(kw in h for kw in ["waitlist", "liste d'attente", "join the waitlist", "coming soon"]):
+            issues.append("Formulaire waitlist détecté pour e-commerce — remplacer par un bouton d'achat Stripe")
+        if "stripe" not in h and "buy.stripe.com" not in h:
+            issues.append("Aucun lien Stripe détecté — le CTA doit pointer vers un Stripe Payment Link")
+
+    # Analytics Meta Pixel
+    if "fbq(" not in html and "facebook.net" not in html:
+        issues.append("Meta Pixel / fbq() manquant dans le HTML")
+
+    return issues
+
+
+async def _generate_website_brief(
+    company_name: str,
+    mission_statement: str,
+    product_description: str,
+    target_audience: str,
+    business_type: str,
+    market_scan: str = "",
+    stripe_checkout_url: str = "",
+) -> str:
+    """Generate a creative website brief (brand direction, palette, image brief, structure)
+    before the Builder agent runs. Uses a cheap/fast model (gpt-4o-mini).
+    Returns a markdown brief to inject into the landing_page user prompt.
+    """
+    from app.agents.llm_client import call_simple
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    if not settings.openai_api_key and not settings.anthropic_api_key:
+        return ""
+
+    provider = "openai" if settings.openai_api_key else "anthropic"
+
+    system_prompt = (
+        "Tu es un directeur artistique et growth marketer spécialisé en création de marques digitales.\n"
+        "À partir d'une description de business, tu génères un brief créatif complet pour guider "
+        "la génération d'une landing page professionnelle.\n"
+        "Sois spécifique, actionnable et cohérent. Pas de généricités. "
+        "Adapte tout au vrai produit et à la vraie cible."
+    )
+
+    market_excerpt = market_scan[:1000] if market_scan else ""
+    cta_instruction = (
+        f"\nSTRIPE CHECKOUT URL disponible: {stripe_checkout_url}\n"
+        "Le CTA principal DOIT pointer vers cette URL Stripe. JAMAIS de formulaire waitlist.\n"
+        if stripe_checkout_url
+        else (
+            "\nPour e-commerce: CTA = bouton d'achat vers Stripe Payment Link (placeholder: "
+            "https://buy.stripe.com/PLACEHOLDER). JAMAIS de formulaire waitlist.\n"
+            if business_type == "ecommerce"
+            else ""
+        )
+    )
+    user_msg = (
+        f"Business: {company_name}\n"
+        f"Type: {business_type}\n"
+        f"Mission: {mission_statement}\n"
+        f"Produit: {product_description or '(non précisé)'}\n"
+        f"Audience: {target_audience or '(non précisée)'}\n"
+        + (f"\nExtrait étude de marché:\n{market_excerpt}\n" if market_excerpt else "")
+        + cta_instruction
+        + "\n\nGénère un brief créatif structuré en 6 sections :\n"
+        "1. VIBE DE MARQUE (1 phrase : ambiance, univers, ton — ex: 'premium wellness, naturel, chaleureux')\n"
+        "2. SYSTÈME VISUEL (palette 3 couleurs hex + nom, typographie headline + body, style photo)\n"
+        "3. BRIEF IMAGE PRODUIT (prompt détaillé pour générer une photo produit IA, 2-3 phrases, style "
+        "photo de marque premium — nomme 2 marques de référence esthétique)\n"
+        "4. STRUCTURE DE PAGE (sections ordonnées, spécifiques au type de business et au produit)\n"
+        "5. CTA & TRUST SIGNALS (type de CTA principal, 3-4 trust signals spécifiques au produit)\n"
+        "6. ANALYTICS EVENTS (liste les 3-4 events JS à tracker : ViewContent au load, "
+        "Lead sur email submit, InitiateCheckout sur CTA click, Purchase confirmation)\n\n"
+        "Format: markdown concis, chaque section titrée. Max 450 mots."
+    )
+
+    try:
+        resp = await call_simple(system_prompt, user_msg, provider=provider, max_tokens=700)
+        return resp.content.strip()
+    except Exception as exc:
+        logger.warning("website_brief_generation_failed", error=str(exc))
+        return ""
 
 
 async def _propose_retry_task(db, mission, company, error: str) -> None:

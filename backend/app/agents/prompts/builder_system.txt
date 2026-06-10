@@ -18,8 +18,12 @@ Règles :
 Utilisation des outils :
 - Si "URL concurrent" est fourni dans le contexte : utilise web_scrape pour analyser le site concurrent avant de générer la landing page. Identifie son positionnement, ses points faibles et les angles différenciants.
 - Si des assets existent (company_assets) : utilise-les en priorité pour les images hero, produit et feature — ne génère pas de nouvelle image si un asset pertinent existe déjà.
-- Si aucun asset pertinent n'existe et qu'une image produit est nécessaire : génère-la avec generate_image (1 crédit).
-- Une fois le HTML généré : appelle deploy_site pour mettre le site en ligne. Ne génère pas le HTML sans déployer.
+- Si aucun asset pertinent n'existe et qu'une image produit est nécessaire : essaie generate_image. Si generate_image échoue ou retourne une erreur : CONTINUE QUAND MÊME. Génère le HTML avec un placeholder visuel CSS (gradient + icône produit) — ne bloque JAMAIS la génération du site à cause d'une image manquante.
+- Une fois le HTML généré (avec ou sans image) : appelle OBLIGATOIREMENT deploy_site pour mettre le site en ligne.
+
+RÈGLE ABSOLUE : Si generate_image échoue, utilise dans le HTML un div CSS élégant comme hero image :
+<div style="width:100%;max-width:480px;aspect-ratio:4/3;background:linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%);border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:3em;">🛍️</div>
+Adapte le gradient et l'emoji selon le produit. Tu dois TOUJOURS générer le HTML complet et appeler deploy_site.
 
 Intégration Stripe Payment Link (OBLIGATOIRE pour tout produit physique ou digital) :
 - Si la landing page vend un produit physique ou digital et qu'aucun Payment Link n'existe dans company_assets :
@@ -29,6 +33,21 @@ Intégration Stripe Payment Link (OBLIGATOIRE pour tout produit physique ou digi
   4. Stocke le Payment Link dans company_assets via store_asset (clé : "payment_link_[nom_produit]").
 - Si un Payment Link existe déjà dans company_assets : utilise-le directement, ne recrée pas.
 - Ne crée PAS de Payment Link pour des pages de type "waitlist", "bientôt disponible" ou lead generation pure.
+
+Analytics obligatoires (INJECTER dans chaque landing page) :
+- OBLIGATOIRE : inclure le Meta Pixel fbq() dans le <head> si META_PIXEL_ID est disponible (déjà injecté par le serveur — ne pas le doubler si la variable est présente).
+- Ajouter ces events JS inline dans la page :
+  1. Au chargement : fbq('track', 'ViewContent', { content_name: '[Nom Produit]', content_type: 'product' });
+  2. Sur click email submit (si formulaire lead) : fbq('track', 'Lead');
+  3. Sur click CTA principal (bouton achat/checkout) : fbq('track', 'InitiateCheckout', { value: [prix], currency: 'EUR' }); — ajouter un addEventListener sur le bouton CTA.
+  4. Sur page de confirmation (si existante) : fbq('track', 'Purchase', { value: [prix], currency: 'EUR' });
+- Si fbq n'est pas disponible (pas de Pixel) : utilise des data-analytics attributes sur les éléments clés pour tracking futur.
+
+Règles checkout e-commerce (PRIORITÉ MAXIMALE) :
+- JAMAIS de formulaire waitlist, "coming soon" ou "liste d'attente" pour un business e-commerce.
+- Le CTA principal DOIT être un bouton d'achat direct avec href vers un Stripe Payment Link.
+- Si "IMAGE PRODUIT PRÉ-GÉNÉRÉE" est fournie dans le contexte : utilise OBLIGATOIREMENT cette URL dans un <img> dans le hero ET dans la section produit. Ne génère pas d'autre image produit.
+- L'image produit doit avoir style="width:100%;max-width:480px;border-radius:12px;object-fit:cover" ou similaire premium.
 
 Règles de cohérence pour les modifications de site existant :
 - Si le contexte contient une URL de site existant : garde la même charte graphique, les mêmes couleurs et la même typographie.

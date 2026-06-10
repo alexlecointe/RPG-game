@@ -34,10 +34,15 @@ SCORING_RUBRICS: dict[str, str] = {
     ),
     "landing_page": (
         "- Complete, valid HTML (DOCTYPE to closing </html>)\n"
-        "- Clear hero section with headline + CTA\n"
+        "- Clear hero section with compelling headline + CTA\n"
         "- Responsive / mobile-friendly CSS\n"
-        "- Multiple sections (hero, benefits, social proof, pricing, FAQ)\n"
-        "- No placeholder text — all content is specific to the company"
+        "- Multiple sections (hero, benefits, how-it-works, social proof, pricing/offer, FAQ)\n"
+        "- No placeholder text — all content is specific to the company\n"
+        "- Coherent visual system: consistent palette, typography and spacing (not default grey/blue)\n"
+        "- Product image embedded (real URL or well-crafted CSS mockup) — not a generic placeholder\n"
+        "- Brand vibe matches the product category (wellness=natural, sport=energetic, tech=clean)\n"
+        "- CTA is specific to the product (not generic 'Click here')\n"
+        "- Trust signals are product-specific (ingredients, guarantee, proof, etc.)"
     ),
     "ad_copy_pack": (
         "- At least 5 distinct ad copy variations\n"
@@ -262,19 +267,45 @@ async def score_deliverable(
     """
     settings = get_settings()
 
+    # Empty deliverable is always a hard failure — no LLM call needed
+    if not (deliverable or "").strip():
+        return 0, "Deliverable is empty. The agent produced no content."
+
     rubric = SCORING_RUBRICS.get(mission_type, DEFAULT_RUBRIC)
+
+    # For landing pages, add structural HTML checks to the scoring context
+    html_context = ""
+    if mission_type == "landing_page" and deliverable:
+        h = deliverable.lower()
+        checks = {
+            "has_doctype": "<!doctype" in h or "<html" in h,
+            "has_viewport": "viewport" in h,
+            "has_img": "<img" in h,
+            "has_cta_button": "<button" in h or ("href=" in h and ("buy" in h or "acheter" in h or "commander" in h or "stripe" in h)),
+            "has_stripe": "stripe" in h or "buy.stripe.com" in h,
+            "has_analytics": "fbq(" in deliverable or "data-analytics" in h,
+            "no_waitlist": not any(w in h for w in ["waitlist", "coming soon", "liste d'attente"]),
+            "has_multiple_sections": h.count("<section") + h.count("class=\"section") >= 3,
+        }
+        failed = [k for k, v in checks.items() if not v]
+        if failed:
+            html_context = f"\nSTRUCTURAL CHECKS FAILED: {', '.join(failed)}\n"
+        else:
+            html_context = "\nAll structural checks passed.\n"
 
     scorer_prompt = (
         "You are a quality-assurance reviewer for AI-generated business deliverables.\n"
         "Score the following deliverable from 1 to 10 based on the rubric.\n\n"
         f"MISSION TYPE: {mission_type}\n"
-        f"BUSINESS TYPE: {business_type}\n\n"
-        f"RUBRIC:\n{rubric}\n\n"
+        f"BUSINESS TYPE: {business_type}\n"
+        + (html_context if html_context else "")
+        + f"\nRUBRIC:\n{rubric}\n\n"
         "Respond ONLY with valid JSON:\n"
         '{"score": <int 1-10>, "feedback": "<2-3 sentences explaining score>", '
         '"strengths": ["..."], "weaknesses": ["..."]}\n\n'
         "Be strict: a score of 7+ means the deliverable is ready to use as-is.\n"
-        "A score below 7 means it needs significant improvements."
+        "A score below 7 means it needs significant improvements.\n"
+        "For landing pages: auto-penalize 2 points for each structural check that failed."
     )
 
     user_msg = (

@@ -33,15 +33,22 @@ async def admin_provision_company(slug: str):
 
 @router.post("/infra/deploy-landing/{company_id}")
 async def admin_deploy_landing(company_id: str, db: DbSession):
-    """Re-deploy the latest landing_page deliverable for a company."""
-    from sqlalchemy import select as sa_select
+    """Re-publish the latest landing_page deliverable via the shared gateway."""
+    from sqlalchemy import select as sa_select, text as sa_text
     from app.models.entities import Mission, MissionStatus
-    from app.services.site_deploy import deploy_landing_html
     from app.services.company import CompanyService
+    from app.services.site_hosting import build_gateway_url, publish_site
+
+    # Bypass RLS for admin queries by setting the tenant context
+    await db.execute(sa_text(f"SET LOCAL app.current_company_id = '{company_id}'"))
 
     result = await db.execute(
         sa_select(Mission)
-        .where(Mission.company_id == company_id, Mission.mission_type == "landing_page", Mission.status == MissionStatus.COMPLETED)
+        .where(
+            Mission.company_id == company_id,
+            Mission.mission_type == "landing_page",
+            Mission.status == MissionStatus.COMPLETED,
+        )
         .order_by(Mission.completed_at.desc())
         .limit(1)
     )
@@ -55,35 +62,20 @@ async def admin_deploy_landing(company_id: str, db: DbSession):
         return {"error": "Company not found"}
 
     slug = company.slug or ""
-    deploy = await deploy_landing_html(slug, mission.deliverable, company.name, company.render_service_id)
-    # Compute URL: prefer SITE_BASE_DOMAIN, fall back to Render slug URL
-    if not deploy.get("site_url") and slug:
-        from app.core.config import get_settings
-        settings = get_settings()
-        if settings.site_base_domain:
-            deploy["site_url"] = f"https://{slug}.{settings.site_base_domain.strip('.')}"
-        else:
-            deploy["site_url"] = f"https://rpg-{slug}.onrender.com"
-    if deploy.get("site_url"):
-        company.site_url = deploy["site_url"]
-        await db.commit()
-    return deploy
+    if not slug:
+        return {"error": "Company has no slug"}
 
-
-@router.post("/company/{company_id}/set-site-url")
-async def admin_set_site_url(company_id: str, site_url: str, render_service_id: str = "", db: DbSession = None):
-    """Manually set render_url (= site_url) and optionally render_service_id for a company."""
-    from sqlalchemy import select as sa_select
-    from app.models.entities import Company as CompanyModel
-    result = await db.execute(sa_select(CompanyModel).where(CompanyModel.id == company_id))
-    company = result.scalar_one_or_none()
-    if not company:
-        return {"error": "Company not found"}
-    company.render_url = site_url
-    if render_service_id:
-        company.render_service_id = render_service_id
+    artifact = await publish_site(
+        db,
+        company_id=company_id,
+        slug=slug,
+        html_content=mission.deliverable,
+        mission_id=mission.id,
+    )
     await db.commit()
-    return {"render_url": company.render_url, "render_service_id": company.render_service_id}
+
+    site_url = build_gateway_url(slug)
+    return {"deployed": True, "platform": "gateway", "slug": slug, "site_url": site_url, "version": artifact.version}
 
 
 @router.get("/overview", response_model=AdminOverview)
