@@ -8,7 +8,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
-from app.core.database import DbSession
+from app.api.deps import DbSession
 from app.services.site_hosting import build_gateway_url, get_live_artifact
 
 router = APIRouter()
