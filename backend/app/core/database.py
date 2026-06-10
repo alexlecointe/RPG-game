@@ -20,7 +20,8 @@ if settings.is_postgres:
         "pool_recycle": 300,
         "pool_size": 5,
         "max_overflow": 10,
-        "connect_args": {"statement_cache_size": 0},
+        # asyncpg needs ssl passed as connect_arg, not as URL ?sslmode=
+        "connect_args": {"ssl": "require", "statement_cache_size": 0},
     })
 
 engine = create_async_engine(settings.database_url, **_engine_kwargs)
@@ -75,6 +76,8 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str, str]] = [
     ("companies", "ads_wallet_balance_cents", "INTEGER DEFAULT 0", "INTEGER DEFAULT 0"),
     ("companies", "ads_payment_state", "VARCHAR(40)", "VARCHAR(40)"),
     ("companies", "ads_winding_down", "BOOLEAN DEFAULT 0", "BOOLEAN DEFAULT FALSE"),
+    ("companies", "infra_status", "VARCHAR(20) DEFAULT 'pending'", "VARCHAR(20) DEFAULT 'pending'"),
+    ("companies", "product_image_url", "VARCHAR(500)", "VARCHAR(500)"),
     ("quest_steps", "retry_count", "INTEGER DEFAULT 0", "INTEGER DEFAULT 0"),
     ("mission_logs", "level", "VARCHAR(10) DEFAULT 'info'", "VARCHAR(10) DEFAULT 'info'"),
     ("mission_logs", "metadata_json", "TEXT", "TEXT"),
