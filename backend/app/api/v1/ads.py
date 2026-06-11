@@ -40,6 +40,18 @@ class AdsLaunchBody(BaseModel):
     auto_generate_videos: bool = Field(default=True, description="Generate/reuse videos if video_urls are missing")
 
 
+class AdsLaunchQueuedOut(BaseModel):
+    queued: bool
+    task_id: str
+
+
+class AdsLaunchTaskStatusOut(BaseModel):
+    task_id: str
+    state: str
+    result: dict | None = None
+    error: str | None = None
+
+
 @router.post("/companies/{company_id}/ads/budget")
 async def set_ads_budget(company_id: str, body: AdsBudgetBody, db: DbSession):
     company = await set_daily_budget(db, company_id, body.daily_budget_cents)
@@ -91,6 +103,38 @@ async def launch_ads(company_id: str, body: AdsLaunchBody, db: DbSession):
         raise HTTPException(400, str(e)) from e
 
     return campaign
+
+
+@router.post("/companies/{company_id}/ads/launch-async", response_model=AdsLaunchQueuedOut)
+async def launch_ads_async(company_id: str, body: AdsLaunchBody, db: DbSession):
+    svc = CompanyService(db)
+    company = await svc.get_company(company_id)
+    if not company:
+        raise HTTPException(404, "Company not found")
+    if company.daily_ads_budget_cents <= 0:
+        raise HTTPException(400, "Set daily budget first")
+
+    from app.workers.celery_app import launch_ads_task
+
+    task = launch_ads_task.apply_async(args=[company_id, body.model_dump()], queue="ads")
+    return {"queued": True, "task_id": task.id}
+
+
+@router.get("/companies/{company_id}/ads/launch-status/{task_id}", response_model=AdsLaunchTaskStatusOut)
+async def ads_launch_status(company_id: str, task_id: str):
+    from app.workers.celery_app import celery_app
+
+    result = celery_app.AsyncResult(task_id)
+    payload = result.result if isinstance(result.result, dict) else None
+    error = None
+    if result.failed():
+        error = str(result.result)
+    return {
+        "task_id": task_id,
+        "state": result.state,
+        "result": payload,
+        "error": error,
+    }
 
 
 @router.get("/companies/{company_id}/ads/campaigns", response_model=list[AdCampaignOut])

@@ -11,7 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.tools.meta_ads_action import (
     create_ad,
+    create_ad_set,
     create_ad_creative,
+    create_custom_audience,
+    create_lookalike_audience,
+    list_custom_audiences,
     upload_video,
 )
 from app.core.config import get_settings
@@ -97,6 +101,44 @@ async def _latest_company_video_urls(db: AsyncSession, company_id: str, limit: i
         if asset.public_url and asset.public_url.startswith(("http://", "https://"))
     ]
 
+
+async def _store_ad_video_asset(company: Company, video_url: str, idx: int) -> str:
+    """Persist ad videos to R2 when configured, and enforce R2 in prod if requested."""
+    settings = get_settings()
+    if not video_url:
+        return ""
+
+    r2_base = settings.r2_public_url.rstrip("/")
+    if r2_base and video_url.startswith(r2_base):
+        return video_url
+
+    if settings.ads_video_r2_required and not settings.r2_configured:
+        raise ValueError("r2_required_for_ads_video: configure Cloudflare R2 or disable ADS_VIDEO_R2_REQUIRED")
+
+    if not settings.r2_configured:
+        return video_url
+
+    from app.agents.tools.store_asset import _execute_store_asset
+
+    raw = await _execute_store_asset(
+        company.id,
+        f"meta-ad-{idx + 1}.mp4",
+        video_url,
+        "video",
+    )
+    try:
+        stored = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"video_store_failed: {raw[:200]}") from exc
+
+    if stored.get("error"):
+        raise ValueError(f"video_store_failed: {stored['error']}")
+
+    public_url = stored.get("public_url") or video_url
+    if settings.ads_video_r2_required and r2_base and not public_url.startswith(r2_base):
+        raise ValueError("r2_required_for_ads_video: stored video is not using R2 public URL")
+    return public_url
+
 logger = structlog.get_logger()
 META_GRAPH = "https://graph.facebook.com/v21.0"
 
@@ -107,6 +149,7 @@ TRIGGER_UNDERPERFORMING_HOURS = 48    # spend=0 after 48h → pause
 TRIGGER_ROAS_SCALE_THRESHOLD = 2.0    # ROAS ≥ 2x → suggest scaling
 TRIGGER_SCALE_MIN_SPEND_CENTS = 5000  # min $50 spend before scaling recommendation
 TRIGGER_SCALE_NOTIFY_INTERVAL_H = 72  # re-notify max every 3 days
+TRIGGER_LOOKALIKE_MIN_HOURS = 168     # min 7 days before automatic lookalike creation
 
 # ---
 # State contextual messages (Polsia-like copy)
@@ -409,12 +452,21 @@ async def launch_ads_v1(
     while len(resolved_videos) < 3:
         resolved_videos.append(resolved_videos[-1])
 
+    stored_videos: list[str] = []
+    for idx, url in enumerate(resolved_videos[:3]):
+        stored_url = await _store_ad_video_asset(company, url, idx)
+        if stored_url:
+            stored_videos.append(stored_url)
+
+    if not stored_videos:
+        raise ValueError("video_urls_required: no public/stored video URL available for Meta upload")
+
     return await launch_meta_campaign(
         db=db,
         company=company,
         campaign_name=campaign_name or f"{company.name} Meta Ads V1",
         daily_budget_cents=budget,
-        video_urls=resolved_videos[:3],
+        video_urls=stored_videos[:3],
         headlines=resolved_headlines,
         bodies=resolved_bodies,
         countries=countries or ["FR", "BE", "CH"],
@@ -467,6 +519,7 @@ async def _auto_refresh_creative(
         if not new_video_url:
             logger.warning("trigger2_video_generation_failed", campaign_id=camp.id)
             return
+        new_video_url = await _store_ad_video_asset(company, new_video_url, 0)
 
         link_url = _get_company_site_url(company)
 
@@ -743,6 +796,114 @@ async def _apply_split_test(
         logger.warning("split_test_error", campaign_id=camp.id, error=str(exc))
 
 
+async def _auto_create_lookalike(
+    db: AsyncSession,
+    company: Company,
+    camp: AdCampaign,
+    token: str,
+    ad_account: str,
+) -> None:
+    """Best-effort ROAS trigger: create website source audience + 1% lookalike."""
+    settings = get_settings()
+    if not settings.meta_pixel_id or not token or not ad_account:
+        return
+
+    try:
+        source_name = f"RPG {company.slug or company.id} website visitors/source"
+        lookalike_name = f"RPG {company.slug or company.id} lookalike 1pct"
+
+        audiences = await list_custom_audiences(token, ad_account)
+        existing = audiences.get("audiences", [])
+        existing_lookalike = next((a for a in existing if a.get("name") == lookalike_name), None)
+        if existing_lookalike:
+            logger.info("lookalike_already_exists", campaign_id=camp.id, audience_id=existing_lookalike.get("id"))
+            return
+
+        source = next((a for a in existing if a.get("name") == source_name), None)
+        if not source:
+            source = await create_custom_audience(
+                token,
+                ad_account,
+                name=source_name,
+                subtype="WEBSITE",
+                retention_days=30,
+            )
+            if source.get("error"):
+                logger.warning("lookalike_source_create_failed", campaign_id=camp.id, error=source.get("error"))
+                return
+
+        source_id = source.get("id") or source.get("audience_id")
+        if not source_id:
+            return
+
+        result = await create_lookalike_audience(
+            token,
+            ad_account,
+            source_id,
+            ratio=0.01,
+            countries=["FR"],
+            name=lookalike_name,
+        )
+        if result.get("created"):
+            lookalike_adset_id = None
+            lookalike_id = result.get("audience_id")
+            if camp.meta_campaign_id and lookalike_id:
+                adset = await create_ad_set(
+                    token,
+                    ad_account,
+                    camp.meta_campaign_id,
+                    f"{camp.name} Lookalike 1%",
+                    daily_budget_cents=max(camp.daily_budget_cents or 1000, 1000),
+                    status="PAUSED",
+                    countries=["FR"],
+                    age_min=18,
+                    age_max=45,
+                    objective=camp.objective or "OUTCOME_SALES",
+                    custom_audience_ids=[lookalike_id],
+                )
+                lookalike_adset_id = adset.get("ad_set_id")
+
+                creative_result = await db.execute(
+                    select(AdCreative)
+                    .where(
+                        AdCreative.campaign_id == camp.id,
+                        AdCreative.meta_creative_id.is_not(None),
+                    )
+                    .order_by(AdCreative.ctr.desc(), AdCreative.created_at.desc())
+                    .limit(1)
+                )
+                creative = creative_result.scalar_one_or_none()
+                if creative and creative.meta_creative_id and lookalike_adset_id:
+                    await create_ad(
+                        token,
+                        ad_account,
+                        lookalike_adset_id,
+                        creative.meta_creative_id,
+                        f"{creative.title} Lookalike",
+                        "PAUSED",
+                    )
+
+            await _notify_ads(
+                db,
+                company.id,
+                "Lookalike audience créée",
+                (
+                    f"La campagne \"{camp.name}\" dépasse le seuil ROAS. "
+                    "Une audience lookalike 1% a été créée"
+                    + (f" avec un adset prêt ({lookalike_adset_id})." if lookalike_adset_id else ".")
+                ),
+            )
+            logger.info(
+                "lookalike_created",
+                campaign_id=camp.id,
+                audience_id=result.get("audience_id"),
+                adset_id=lookalike_adset_id,
+            )
+
+    except Exception as exc:
+        logger.warning("lookalike_auto_failed", campaign_id=camp.id, error=str(exc))
+
+
 async def monitor_campaigns(db: AsyncSession, company_id: str) -> list[AdSnapshot]:
     """Pull insights and apply 5 Polsia triggers."""
     settings = get_settings()
@@ -927,6 +1088,15 @@ async def monitor_campaigns(db: AsyncSession, company_id: str) -> list[AdSnapsho
                         )
                         camp.last_scale_notified_at = now
                         logger.info("ads_trigger_roas_scale", campaign_id=camp.id, roas=purchase_roas)
+
+                    if hours_alive >= TRIGGER_LOOKALIKE_MIN_HOURS:
+                        await _auto_create_lookalike(
+                            db,
+                            company,
+                            camp,
+                            token,
+                            settings.meta_ad_account_id or "",
+                        )
 
                 # Trigger 4 — BUDGET_EXHAUSTED: owner must fix billing/top-up.
                 if company and (company.ads_wallet_balance_cents or 0) <= 0 and company.daily_ads_budget_cents > 0:

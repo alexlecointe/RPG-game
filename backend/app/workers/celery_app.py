@@ -61,6 +61,9 @@ celery_app.conf.task_routes = {
     "app.workers.celery_app.run_mission_task": {"queue": "missions"},
     "app.workers.celery_app.check_recurring_missions": {"queue": "missions"},
     "app.workers.celery_app.run_god_mode_step": {"queue": "missions"},
+    "app.workers.celery_app.launch_ads_task": {"queue": "ads"},
+    "app.workers.celery_app.monitor_ads_campaigns": {"queue": "ads"},
+    "app.workers.celery_app.charge_ads_wallets_daily": {"queue": "ads"},
 }
 
 
@@ -89,6 +92,59 @@ def run_mission_task(self, mission_id: str) -> dict:
     _run_async(_run_mission(mission_id))
 
     return {"mission_id": mission_id, "status": "completed"}
+
+
+@celery_app.task(
+    bind=True,
+    name="app.workers.celery_app.launch_ads_task",
+    max_retries=2,
+    default_retry_delay=60,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+)
+def launch_ads_task(self, company_id: str, payload: dict | None = None) -> dict:
+    """Launch Meta Ads in the ads queue instead of blocking the API request."""
+    return _run_async(_launch_ads_async(company_id, payload or {}))
+
+
+async def _launch_ads_async(company_id: str, payload: dict) -> dict:
+    import structlog
+    from app.core.database import SessionLocal
+    from app.services.ads import launch_ads_v1
+
+    logger = structlog.get_logger()
+    async with SessionLocal() as db:
+        from app.services.company import CompanyService
+
+        company = await CompanyService(db).get_company(company_id)
+        if not company:
+            raise ValueError("company_not_found")
+        if not company.daily_ads_budget_cents or company.daily_ads_budget_cents <= 0:
+            raise ValueError("ads_budget_required")
+
+        campaign = await launch_ads_v1(
+            db,
+            company,
+            campaign_name=payload.get("campaign_name", ""),
+            daily_budget_cents=company.daily_ads_budget_cents,
+            video_urls=payload.get("video_urls") or [],
+            headlines=payload.get("headlines") or [],
+            bodies=payload.get("bodies") or [],
+            countries=payload.get("countries") or ["FR"],
+            age_min=payload.get("age_min"),
+            age_max=payload.get("age_max"),
+            call_to_action=payload.get("call_to_action"),
+            objective=payload.get("objective"),
+            auto_generate_videos=payload.get("auto_generate_videos", True),
+        )
+        logger.info("ads_launch_task_done", company_id=company_id, campaign_id=campaign.id)
+        return {
+            "company_id": company_id,
+            "campaign_id": campaign.id,
+            "meta_campaign_id": campaign.meta_campaign_id,
+            "status": campaign.status.value if hasattr(campaign.status, "value") else str(campaign.status),
+        }
 
 
 @celery_app.task(name="app.workers.celery_app.check_recurring_missions")

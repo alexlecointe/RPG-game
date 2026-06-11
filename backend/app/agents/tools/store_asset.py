@@ -38,6 +38,7 @@ STORE_ASSET_SCHEMA = {
 
 ASSETS_ROOT = Path("data/assets")
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_VIDEO_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
 
 
 def _safe_filename(name: str) -> str:
@@ -88,9 +89,10 @@ async def _execute_store_asset(
             resp.raise_for_status()
             content = resp.content
 
-            if len(content) > MAX_FILE_SIZE:
+            max_size = MAX_VIDEO_FILE_SIZE if asset_type == "video" else MAX_FILE_SIZE
+            if len(content) > max_size:
                 return json.dumps({
-                    "error": f"File too large ({len(content)} bytes, max {MAX_FILE_SIZE})",
+                    "error": f"File too large ({len(content)} bytes, max {max_size})",
                 })
 
     except Exception as exc:

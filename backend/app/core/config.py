@@ -99,6 +99,8 @@ class Settings(BaseSettings):
     # Set OPENAI_VIDEO_MODEL=sora (or the current slug) to enable.
     # Falls back to Replicate minimax when not set.
     openai_video_model: str = ""  # e.g. "sora" — see https://platform.openai.com/docs/api-reference/video
+    ads_video_provider: str = "auto"  # auto | openai | replicate
+    ads_video_r2_required: bool = False  # set true in prod to force Meta-readable R2 URLs
 
     @property
     def r2_configured(self) -> bool:

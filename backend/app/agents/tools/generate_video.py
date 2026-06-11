@@ -203,21 +203,31 @@ async def generate_video(
     aspect_ratio: str = "9:16",
 ) -> str | None:
     """Try OpenAI Sora first, fall back to Replicate, return URL or None."""
-    # Provider 1: OpenAI Sora
     from app.core.config import get_settings
     settings = get_settings()
-    if settings.openai_api_key and settings.openai_video_model:
+    provider = (settings.ads_video_provider or "auto").lower()
+
+    if provider not in ("auto", "openai", "replicate"):
+        logger.warning("unknown_ads_video_provider", provider=provider)
+        provider = "auto"
+
+    # Provider 1: OpenAI/Sora-style video API.
+    if provider in ("auto", "openai") and settings.openai_api_key and settings.openai_video_model:
         url = await _generate_via_openai(prompt, duration_seconds, aspect_ratio)
         if url:
             logger.info("video_generated_via_openai", duration=duration_seconds)
             return url
+        if provider == "openai":
+            logger.warning("openai_video_unavailable_provider_locked")
+            return None
         logger.warning("openai_video_unavailable_falling_back_to_replicate")
 
     # Provider 2: Replicate
-    url = await _generate_via_replicate(prompt, duration_seconds, aspect_ratio)
-    if url:
-        logger.info("video_generated_via_replicate", duration=duration_seconds)
-        return url
+    if provider in ("auto", "replicate"):
+        url = await _generate_via_replicate(prompt, duration_seconds, aspect_ratio)
+        if url:
+            logger.info("video_generated_via_replicate", duration=duration_seconds)
+            return url
 
     return None
 
