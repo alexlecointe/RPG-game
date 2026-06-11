@@ -45,7 +45,7 @@ GENERATE_VIDEO_SCHEMA = {
 }
 
 OPENAI_VIDEO_API = "https://api.openai.com/v1/videos"
-REPLICATE_API = "https://api.replicate.com/v1/predictions"
+REPLICATE_TEXT_TO_VIDEO_API = "https://api.replicate.com/v1/models/minimax/video-01/predictions"
 
 
 def _openai_seconds(duration: int) -> str:
@@ -137,23 +137,22 @@ async def _generate_via_replicate(
     duration: int = 15,
     aspect_ratio: str = "9:16",
 ) -> str | None:
-    """Generate video via Replicate minimax/video-01-live model (polling)."""
+    """Generate video via Replicate text-to-video model (polling)."""
     from app.core.config import get_settings
     settings = get_settings()
     if not settings.replicate_api_token:
         return None
 
     headers = {
-        "Authorization": f"Token {settings.replicate_api_token}",
+        "Authorization": f"Bearer {settings.replicate_api_token}",
         "Content-Type": "application/json",
     }
 
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
-            REPLICATE_API,
+            REPLICATE_TEXT_TO_VIDEO_API,
             headers=headers,
             json={
-                "version": "minimax/video-01-live",
                 "input": {
                     "prompt": prompt,
                     "duration": min(30, max(5, duration)),
@@ -162,7 +161,11 @@ async def _generate_via_replicate(
             },
         )
         if resp.status_code != 201:
-            logger.warning("replicate_video_create_failed", status=resp.status_code)
+            logger.warning(
+                "replicate_video_create_failed",
+                status=resp.status_code,
+                body=resp.text[:300],
+            )
             return None
         prediction = resp.json()
 
@@ -177,7 +180,7 @@ async def _generate_via_replicate(
             await asyncio.sleep(5)
             poll = await client.get(
                 poll_url,
-                headers={"Authorization": f"Token {settings.replicate_api_token}"},
+                headers={"Authorization": f"Bearer {settings.replicate_api_token}"},
             )
             data = poll.json()
             status = data.get("status", "")

@@ -150,15 +150,23 @@ async def launch_ads(
         select(AdCampaign)
         .where(
             AdCampaign.company_id == company_id,
-            AdCampaign.status == AdCampaignStatus.DRAFT,
             AdCampaign.meta_campaign_id.is_(None),
             AdCampaign.name == "Preparing Meta Ads",
         )
-        .limit(1)
     )
-    pending = existing.scalar_one_or_none()
+    placeholders = list(existing.scalars().all())
+
+    pending = next((campaign for campaign in placeholders if campaign.status == AdCampaignStatus.DRAFT), None)
     if pending:
         return pending
+
+    # Clean up stale local placeholders from previous failed attempts. If there is
+    # no Meta campaign id attached, these rows are only local "preparing" shells.
+    for placeholder in placeholders:
+        await db.delete(placeholder)
+    if placeholders:
+        await db.commit()
+        logger.info("ads_launch_placeholder_cleanup", company_id=company_id, removed=len(placeholders))
 
     campaign = AdCampaign(
         company_id=company.id,
