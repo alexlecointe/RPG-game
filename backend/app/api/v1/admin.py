@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import case, cast, Date, func, select
+from sqlalchemy import case, cast, Date, func, or_, select
 
 from app.api.deps import DbSession, verify_api_key
 from app.models.entities import BetaFeedback, Company, Mission, MissionStatus, TokenUsage, ToolCallLog
@@ -180,6 +180,39 @@ async def admin_companies(
         )
         for c, mc, tt, tc, aq, lm in result.all()
     ]
+
+
+@router.get("/companies/search")
+async def admin_companies_search(query: str, limit: int = 20, db: DbSession = None):
+    term = query.strip()
+    if not term:
+        return {"companies": [], "count": 0}
+
+    result = await db.execute(
+        select(Company)
+        .where(
+            or_(
+                Company.name.ilike(f"%{term}%"),
+                Company.slug.ilike(f"%{term}%"),
+            )
+        )
+        .order_by(Company.created_at.desc())
+        .limit(limit)
+    )
+    companies = result.scalars().all()
+    return {
+        "companies": [
+            {
+                "id": c.id,
+                "name": c.name,
+                "slug": c.slug,
+                "business_type": _business_type_value(c.business_type),
+                "created_at": c.created_at.isoformat(),
+            }
+            for c in companies
+        ],
+        "count": len(companies),
+    }
 
 
 @router.get("/missions", response_model=list[AdminMissionRow])
