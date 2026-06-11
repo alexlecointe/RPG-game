@@ -247,8 +247,11 @@ final class APIClient {
         try await get("/companies/\(companyId)/stripe/status")
     }
 
-    func startStripeOnboarding(companyId: String) async throws -> String {
-        let resp: StripeOnboardingResponse = try await postEmpty("/companies/\(companyId)/stripe/onboarding")
+    func startStripeOnboarding(companyId: String, country: String = "FR") async throws -> String {
+        let resp: StripeOnboardingResponse = try await postJSON(
+            "/companies/\(companyId)/stripe/onboarding",
+            body: ["country": country]
+        )
         return resp.url
     }
 

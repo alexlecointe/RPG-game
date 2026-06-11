@@ -54,7 +54,16 @@ async def fetch_connect_status(account_id: str) -> dict:
     }
 
 
-async def ensure_connect_account(company: Company, db) -> str:
+def _normalize_country(country: str | None) -> str | None:
+    if not country:
+        return None
+    normalized = country.strip().upper()
+    if len(normalized) != 2 or not normalized.isalpha():
+        raise ValueError("invalid_country")
+    return normalized
+
+
+async def ensure_connect_account(company: Company, db, country: str | None = None) -> str:
     """Create Connect Express account if missing."""
     settings = get_settings()
     if not settings.stripe_secret_key:
@@ -69,6 +78,9 @@ async def ensure_connect_account(company: Company, db) -> str:
         "metadata[company_slug]": company.slug or "",
         "business_profile[name]": company.name[:200],
     }
+    normalized_country = _normalize_country(country)
+    if normalized_country:
+        data["country"] = normalized_country
 
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
@@ -81,7 +93,12 @@ async def ensure_connect_account(company: Company, db) -> str:
 
     company.stripe_connect_account_id = account["id"]
     await db.commit()
-    logger.info("stripe_connect_created", company_id=company.id, account_id=account["id"])
+    logger.info(
+        "stripe_connect_created",
+        company_id=company.id,
+        account_id=account["id"],
+        country=normalized_country,
+    )
     return account["id"]
 
 
@@ -98,9 +115,9 @@ def _https_return_urls(settings) -> tuple[str, str]:
     return return_url, refresh_url
 
 
-async def create_onboarding_link(company: Company, db) -> dict:
+async def create_onboarding_link(company: Company, db, country: str | None = None) -> dict:
     settings = get_settings()
-    account_id = await ensure_connect_account(company, db)
+    account_id = await ensure_connect_account(company, db, country=country)
     return_url, refresh_url = _https_return_urls(settings)
 
     data = {

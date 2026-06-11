@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.api.deps import DbSession, verify_api_key
+from app.core.config import get_settings
 from app.schemas.api import (
     BillingPlanOut,
     BillingPlansResponse,
@@ -277,6 +278,9 @@ async def init_subscription(company_id: str, db: DbSession):
 @router.post("/companies/{company_id}/billing/add-trial-credits")
 async def add_trial_credits(company_id: str, db: DbSession):
     """Add 10 trial credits to the subscription (debug / onboarding recovery)."""
+    if get_settings().app_env == "production":
+        raise HTTPException(404, "Not found")
+
     svc = CompanyService(db)
     company = await svc.get_company(company_id)
     if not company:

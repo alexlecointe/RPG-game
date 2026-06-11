@@ -247,7 +247,7 @@ struct GameContainerView: View {
         let s = step("finance")
         let r = running("finance")
         let done = doneCount("finance")
-        let stripeOk = company?.stripeConnectStatus == "active" || company?.stripeConnectStatus == "connected"
+        let stripeOk = company?.stripeConnectStatus == "ready"
         let adsBudget = company?.adsWalletBalanceCents ?? 0
 
         return RetroPanel(

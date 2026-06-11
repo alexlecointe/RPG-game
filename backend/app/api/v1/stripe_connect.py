@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse
 
 from app.api.deps import DbSession, verify_api_key
-from app.schemas.api import StripeOnboardingOut, StripeStatusOut
+from app.schemas.api import StripeOnboardingCreate, StripeOnboardingOut, StripeStatusOut
 from app.services.company import CompanyService
 from app.services.stripe_connect import create_onboarding_link, fetch_connect_status
 
@@ -63,14 +63,18 @@ async def stripe_status(company_id: str, db: DbSession):
 
 
 @router.post("/companies/{company_id}/stripe/onboarding", response_model=StripeOnboardingOut)
-async def stripe_onboarding(company_id: str, db: DbSession):
+async def stripe_onboarding(
+    company_id: str,
+    db: DbSession,
+    body: StripeOnboardingCreate | None = None,
+):
     svc = CompanyService(db)
     company = await svc.get_company(company_id)
     if not company:
         raise HTTPException(404, "Company not found")
 
     try:
-        link = await create_onboarding_link(company, db)
+        link = await create_onboarding_link(company, db, country=body.country if body else None)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
 

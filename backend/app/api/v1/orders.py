@@ -1,20 +1,15 @@
 """Orders API — ventes des founders à leurs clients (Système B)."""
 from __future__ import annotations
 
-from typing import Annotated
-
 import structlog
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, func
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import get_db
+from app.api.deps import DbSession, verify_api_key
 from app.models.entities import Company, Order
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(verify_api_key)])
 logger = structlog.get_logger()
-
-DbSession = Annotated[AsyncSession, Depends(get_db)]
 
 
 @router.get("/companies/{company_id}/orders")

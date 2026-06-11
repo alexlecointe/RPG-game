@@ -1121,7 +1121,7 @@ struct RetroBusinessSheet: View {
 
     private var company: Company? { appState.company }
     private var stripeStatus: String { company?.stripeConnectStatus ?? "not_started" }
-    private var stripeOk: Bool { stripeStatus == "active" || stripeStatus == "connected" || stripeStatus == "ready" }
+    private var stripeOk: Bool { stripeStatus == "ready" }
 
     private var businessStep: QuestStep? {
         appState.questChain.first { $0.agentType == "finance" && !$0.isCompleted }
@@ -1280,7 +1280,7 @@ struct RetroBusinessSheet: View {
 
     private var stripeStatusLabel: String {
         switch stripeStatus {
-        case "ready", "active", "connected": return "Connecté"
+        case "ready": return "Connecté"
         case "pending": return "En attente"
         case "not_started": return "Non configuré"
         default: return stripeStatus

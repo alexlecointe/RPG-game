@@ -331,6 +331,15 @@ class StripeStatusOut(BaseModel):
     payouts_enabled: bool = False
 
 
+class StripeOnboardingCreate(BaseModel):
+    country: Optional[str] = Field(
+        None,
+        min_length=2,
+        max_length=2,
+        description="ISO 3166-1 alpha-2 country code for the Connect account.",
+    )
+
+
 class StripeOnboardingOut(BaseModel):
     url: str
 
