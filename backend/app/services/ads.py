@@ -1,6 +1,7 @@
 """Meta Ads orchestration — Polsia-like launch, wallet, monitoring (5 triggers)."""
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -88,6 +89,28 @@ def _video_prompt(company: Company, variant: dict[str, str]) -> str:
         "Show the product or service in use, fast opening hook, clean premium visuals, "
         "no voiceover, minimal text overlays, clear final CTA."
     )
+
+
+async def _resolve_meta_video_thumbnail(
+    access_token: str,
+    video_id: str,
+    fallback_url: str = "",
+    attempts: int = 12,
+    delay_seconds: int = 5,
+) -> str:
+    """Wait for Meta to finish processing a video and expose a usable thumbnail."""
+    resolved = fallback_url or ""
+    for idx in range(attempts):
+        try:
+            meta_video = await get_video(access_token, video_id)
+            thumb = meta_video.get("thumbnail_url") or ""
+            if thumb:
+                return thumb
+        except Exception as exc:
+            logger.warning("meta_video_thumbnail_fetch_failed", error=str(exc), video_id=video_id, attempt=idx + 1)
+        if idx < attempts - 1:
+            await asyncio.sleep(delay_seconds)
+    return resolved
 
 
 async def _latest_company_video_urls(db: AsyncSession, company_id: str, limit: int = 3) -> list[str]:
@@ -382,11 +405,11 @@ async def launch_meta_campaign(
                 video_id = video_resp.get("video_id", "")
                 thumbnail_url = company.product_image_url or ""
                 if video_id:
-                    try:
-                        video_meta = await get_video(token, video_id)
-                        thumbnail_url = video_meta.get("thumbnail_url") or thumbnail_url
-                    except Exception as exc:
-                        logger.warning("meta_video_thumbnail_fetch_failed", error=str(exc), video_id=video_id)
+                    thumbnail_url = await _resolve_meta_video_thumbnail(
+                        token,
+                        video_id,
+                        fallback_url=thumbnail_url,
+                    )
                 if video_id and settings.meta_page_id:
                     cr_resp = await create_ad_creative(
                         token, ad_account, video_id, title, body_text, link_url,
@@ -414,7 +437,7 @@ async def launch_meta_campaign(
                     meta_ad_id=creative.meta_ad_id,
                 )
             except Exception as exc:
-                logger.warning("meta_video_upload_failed", error=str(exc), video_url=video_url[:80])
+                logger.warning("meta_creative_pipeline_failed", error=str(exc), video_url=video_url[:80])
 
         # Activate delivery objects now that creatives are ready
         if campaign.meta_ad_set_id:
