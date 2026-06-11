@@ -297,6 +297,7 @@ async def launch_meta_campaign(
         "geo_locations": {"countries": geo},
         "age_min": age_min,
         "age_max": age_max,
+        "targeting_automation": {"advantage_audience": 0},
     }
 
     campaign = AdCampaign(

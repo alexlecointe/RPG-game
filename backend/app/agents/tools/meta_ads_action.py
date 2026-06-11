@@ -277,6 +277,7 @@ async def create_ad_set(
         "geo_locations": {"countries": geo},
         "age_min": age_min,
         "age_max": age_max,
+        "targeting_automation": {"advantage_audience": 0},
     }
     if interests:
         targeting["interests"] = interests
