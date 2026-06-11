@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+import json
+
+import structlog
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -21,6 +24,7 @@ from app.services.ads import (
 from app.services.company import CompanyService
 
 router = APIRouter(dependencies=[Depends(verify_api_key)])
+logger = structlog.get_logger()
 
 
 class AdsBudgetBody(BaseModel):
@@ -52,6 +56,56 @@ class AdsLaunchTaskStatusOut(BaseModel):
     error: str | None = None
 
 
+async def _launch_ads_background(company_id: str, payload: dict, placeholder_id: str) -> None:
+    from app.core.database import SessionLocal
+
+    async with SessionLocal() as db:
+        try:
+            company = await CompanyService(db).get_company(company_id)
+            if not company:
+                raise ValueError("company_not_found")
+            if company.daily_ads_budget_cents <= 0:
+                raise ValueError("ads_budget_required")
+
+            campaign = await launch_ads_v1(
+                db,
+                company,
+                payload.get("campaign_name", ""),
+                company.daily_ads_budget_cents,
+                payload.get("video_urls") or [],
+                payload.get("headlines") or [],
+                payload.get("bodies") or [],
+                countries=payload.get("countries") or ["FR"],
+                age_min=payload.get("age_min"),
+                age_max=payload.get("age_max"),
+                call_to_action=payload.get("call_to_action"),
+                objective=payload.get("objective"),
+                auto_generate_videos=payload.get("auto_generate_videos", True),
+            )
+
+            placeholder = await db.get(AdCampaign, placeholder_id)
+            if placeholder and placeholder.meta_campaign_id is None:
+                await db.delete(placeholder)
+                await db.commit()
+
+            logger.info(
+                "ads_launch_background_done",
+                company_id=company_id,
+                campaign_id=campaign.id,
+                meta_campaign_id=campaign.meta_campaign_id,
+            )
+        except Exception as exc:
+            placeholder = await db.get(AdCampaign, placeholder_id)
+            if placeholder:
+                placeholder.status = AdCampaignStatus.BLOCKED
+                placeholder.targeting_json = json.dumps({
+                    "launch_error": str(exc),
+                    "phase": "background_launch",
+                })
+                await db.commit()
+            logger.warning("ads_launch_background_failed", company_id=company_id, error=str(exc))
+
+
 @router.post("/companies/{company_id}/ads/budget")
 async def set_ads_budget(company_id: str, body: AdsBudgetBody, db: DbSession):
     company = await set_daily_budget(db, company_id, body.daily_budget_cents)
@@ -78,7 +132,12 @@ async def ads_daily_cycle(company_id: str, db: DbSession):
 
 
 @router.post("/companies/{company_id}/ads/launch", response_model=AdCampaignOut)
-async def launch_ads(company_id: str, body: AdsLaunchBody, db: DbSession):
+async def launch_ads(
+    company_id: str,
+    body: AdsLaunchBody,
+    db: DbSession,
+    background_tasks: BackgroundTasks,
+):
     svc = CompanyService(db)
     company = await svc.get_company(company_id)
     if not company:
@@ -87,20 +146,31 @@ async def launch_ads(company_id: str, body: AdsLaunchBody, db: DbSession):
     if company.daily_ads_budget_cents <= 0:
         raise HTTPException(400, "Set daily budget first")
 
-    try:
-        campaign = await launch_ads_v1(
-            db, company, body.campaign_name,
-            company.daily_ads_budget_cents,
-            body.video_urls, body.headlines, body.bodies,
-            countries=body.countries,
-            age_min=body.age_min,
-            age_max=body.age_max,
-            call_to_action=body.call_to_action,
-            objective=body.objective,
-            auto_generate_videos=body.auto_generate_videos,
+    existing = await db.execute(
+        select(AdCampaign)
+        .where(
+            AdCampaign.company_id == company_id,
+            AdCampaign.status == AdCampaignStatus.DRAFT,
+            AdCampaign.meta_campaign_id.is_(None),
+            AdCampaign.name == "Preparing Meta Ads",
         )
-    except ValueError as e:
-        raise HTTPException(400, str(e)) from e
+        .limit(1)
+    )
+    pending = existing.scalar_one_or_none()
+    if pending:
+        return pending
+
+    campaign = AdCampaign(
+        company_id=company.id,
+        name="Preparing Meta Ads",
+        status=AdCampaignStatus.DRAFT,
+        daily_budget_cents=company.daily_ads_budget_cents,
+    )
+    db.add(campaign)
+    await db.commit()
+    await db.refresh(campaign)
+
+    background_tasks.add_task(_launch_ads_background, company_id, body.model_dump(), campaign.id)
 
     return campaign
 
