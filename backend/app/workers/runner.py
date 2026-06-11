@@ -476,8 +476,32 @@ async def _run_mission_inner(mission_id: str) -> None:
                     )
 
             if mission.mission_type == "ads_launch_plan":
-                # The LLM calls meta_ads_action directly to create campaigns.
-                # We parse the deliverable to extract Meta campaign IDs and persist them in DB.
+                # Prefer the deterministic backend launcher, then keep the
+                # deliverable parser as a compatibility fallback for tool-call runs.
+                try:
+                    from app.services.ads import launch_ads_v1
+
+                    if company.daily_ads_budget_cents and company.daily_ads_budget_cents > 0:
+                        launched = await launch_ads_v1(db, company)
+                        if log_step:
+                            await log_step(
+                                "ads_launch_v1",
+                                f"Campagne Meta Ads lancee : {launched.name}",
+                            )
+                        deliverable_content = (
+                            f"{deliverable_content}\n\n---\n\n"
+                            f"**Campagne Meta Ads lancee :** {launched.name}\n"
+                            f"**Budget quotidien :** ${(launched.daily_budget_cents or 0) / 100:.2f}\n"
+                        )
+                    elif log_step:
+                        await log_step(
+                            "ads_launch_blocked",
+                            "Budget ads quotidien requis avant le lancement Meta Ads.",
+                        )
+                except Exception as exc:
+                    if log_step:
+                        await log_step("ads_launch_blocked", f"Lancement Meta Ads bloque : {str(exc)[:180]}")
+                    logger.warning("ads_launch_v1_failed", mission_id=mission.id, error=str(exc))
                 await _persist_ads_from_deliverable(db, company, deliverable_content, log_step)
 
             svc = MissionService(db)

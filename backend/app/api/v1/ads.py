@@ -13,7 +13,7 @@ from app.services.ads import (
     charge_ads_wallet,
     get_ads_summary,
     get_wallet_transactions,
-    launch_meta_campaign,
+    launch_ads_v1,
     monitor_campaigns,
     set_daily_budget,
 )
@@ -28,14 +28,15 @@ class AdsBudgetBody(BaseModel):
 
 class AdsLaunchBody(BaseModel):
     campaign_name: str = ""
-    video_urls: list[str] = []
-    headlines: list[str] = []
-    bodies: list[str] = []
-    countries: list[str] = Field(default=["FR"], description="ISO country codes")
-    age_min: int = Field(default=18, ge=13, le=65)
-    age_max: int = Field(default=65, ge=18, le=65)
-    call_to_action: str = Field(default="SHOP_NOW", description="SHOP_NOW | DOWNLOAD | LEARN_MORE | SIGN_UP")
-    objective: str = Field(default="OUTCOME_SALES", description="OUTCOME_SALES | OUTCOME_APP_INSTALLS | OUTCOME_LEADS")
+    video_urls: list[str] = Field(default_factory=list)
+    headlines: list[str] = Field(default_factory=list)
+    bodies: list[str] = Field(default_factory=list)
+    countries: list[str] = Field(default_factory=lambda: ["FR"], description="ISO country codes")
+    age_min: int | None = Field(default=None, ge=13, le=65)
+    age_max: int | None = Field(default=None, ge=18, le=65)
+    call_to_action: str | None = Field(default=None, description="SHOP_NOW | DOWNLOAD | LEARN_MORE | SIGN_UP")
+    objective: str | None = Field(default=None, description="OUTCOME_SALES | OUTCOME_APP_INSTALLS | OUTCOME_LEADS")
+    auto_generate_videos: bool = Field(default=True, description="Generate/reuse videos if video_urls are missing")
 
 
 @router.post("/companies/{company_id}/ads/budget")
@@ -65,7 +66,7 @@ async def launch_ads(company_id: str, body: AdsLaunchBody, db: DbSession):
         raise HTTPException(400, "Set daily budget first")
 
     try:
-        campaign = await launch_meta_campaign(
+        campaign = await launch_ads_v1(
             db, company, body.campaign_name,
             company.daily_ads_budget_cents,
             body.video_urls, body.headlines, body.bodies,
@@ -74,6 +75,7 @@ async def launch_ads(company_id: str, body: AdsLaunchBody, db: DbSession):
             age_max=body.age_max,
             call_to_action=body.call_to_action,
             objective=body.objective,
+            auto_generate_videos=body.auto_generate_videos,
         )
     except ValueError as e:
         raise HTTPException(400, str(e)) from e

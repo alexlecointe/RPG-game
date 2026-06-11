@@ -141,7 +141,7 @@ META_ADS_ACTION_SCHEMA = {
 }
 
 # Maximum tool calls allowed per mission (full flow needs 10+)
-META_ADS_MAX_CALLS = 8
+META_ADS_MAX_CALLS = 14
 
 
 def _act_id(ad_account_id: str) -> str:

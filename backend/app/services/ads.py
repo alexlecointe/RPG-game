@@ -21,6 +21,7 @@ from app.models.entities import (
     AdCreative,
     AdSnapshot,
     Company,
+    CompanyAsset,
     CompanyNotification,
     NotificationType,
     WalletTransaction,
@@ -36,6 +37,64 @@ def _get_company_site_url(company) -> str:
     if url:
         return url
     return _build_site_url_legacy(slug, company.render_url) or ""
+
+
+def _business_objective(company: Company) -> tuple[str, str, int, int]:
+    """Return Meta objective defaults by business type."""
+    business_type = getattr(getattr(company, "business_type", None), "value", str(getattr(company, "business_type", "")))
+    if business_type == "app":
+        return "OUTCOME_APP_INSTALLS", "DOWNLOAD", 18, 35
+    if business_type == "saas":
+        return "OUTCOME_LEADS", "LEARN_MORE", 25, 55
+    return "OUTCOME_SALES", "SHOP_NOW", 18, 45
+
+
+def _default_ad_variants(company: Company) -> list[dict[str, str]]:
+    product = (company.product_description or company.mission_statement or company.name).strip()
+    product_short = product.split(".")[0].strip()[:90] or company.name
+    return [
+        {
+            "headline": f"{company.name[:26]} est live"[:40],
+            "body": f"Decouvre {product_short}. Commande en quelques secondes.",
+            "angle": "direct-benefit",
+        },
+        {
+            "headline": "Le produit a tester"[:40],
+            "body": f"Une nouvelle offre pensee pour {company.target_audience or 'les premiers clients'}.",
+            "angle": "curiosity",
+        },
+        {
+            "headline": "Disponible maintenant"[:40],
+            "body": f"Passe a l'action aujourd'hui avec {company.name}.",
+            "angle": "urgency",
+        },
+    ]
+
+
+def _video_prompt(company: Company, variant: dict[str, str]) -> str:
+    product = company.product_description or company.mission_statement or company.name
+    audience = company.target_audience or "early adopters"
+    return (
+        "Vertical 9:16 Meta video ad, 15 seconds. "
+        f"Brand: {company.name}. Product: {product}. Audience: {audience}. "
+        f"Angle: {variant['angle']}. "
+        "Show the product or service in use, fast opening hook, clean premium visuals, "
+        "no voiceover, minimal text overlays, clear final CTA."
+    )
+
+
+async def _latest_company_video_urls(db: AsyncSession, company_id: str, limit: int = 3) -> list[str]:
+    result = await db.execute(
+        select(CompanyAsset)
+        .where(CompanyAsset.company_id == company_id, CompanyAsset.asset_type == "video")
+        .order_by(CompanyAsset.created_at.desc())
+        .limit(limit)
+    )
+    return [
+        asset.public_url
+        for asset in result.scalars().all()
+        if asset.public_url and asset.public_url.startswith(("http://", "https://"))
+    ]
 
 logger = structlog.get_logger()
 META_GRAPH = "https://graph.facebook.com/v21.0"
@@ -246,6 +305,87 @@ async def launch_meta_campaign(
     return campaign
 
 
+async def launch_ads_v1(
+    db: AsyncSession,
+    company: Company,
+    campaign_name: str = "",
+    daily_budget_cents: int | None = None,
+    video_urls: list[str] | None = None,
+    headlines: list[str] | None = None,
+    bodies: list[str] | None = None,
+    countries: list[str] | None = None,
+    age_min: int | None = None,
+    age_max: int | None = None,
+    call_to_action: str | None = None,
+    objective: str | None = None,
+    auto_generate_videos: bool = True,
+) -> AdCampaign:
+    """Deterministic Polsia-style launch path for the Ads mission.
+
+    The agent can still provide videos/copy, but this path makes the launch
+    robust when it only has company context and a budget.
+    """
+    default_objective, default_cta, default_age_min, default_age_max = _business_objective(company)
+    objective = objective or default_objective
+    call_to_action = call_to_action or default_cta
+    age_min = age_min or default_age_min
+    age_max = age_max or default_age_max
+    budget = daily_budget_cents or company.daily_ads_budget_cents or 0
+    if budget <= 0:
+        raise ValueError("ads_budget_required")
+
+    variants = _default_ad_variants(company)
+    resolved_headlines = [
+        (headlines[i] if headlines and i < len(headlines) and headlines[i] else variants[i]["headline"])[:40]
+        for i in range(3)
+    ]
+    resolved_bodies = [
+        (bodies[i] if bodies and i < len(bodies) and bodies[i] else variants[i]["body"])
+        for i in range(3)
+    ]
+
+    resolved_videos = list(video_urls or [])[:3]
+    if len(resolved_videos) < 3:
+        for url in await _latest_company_video_urls(db, company.id, limit=3 - len(resolved_videos)):
+            if url not in resolved_videos:
+                resolved_videos.append(url)
+
+    if len(resolved_videos) < 3 and auto_generate_videos:
+        from app.agents.tools.generate_video import generate_video
+
+        for idx in range(len(resolved_videos), 3):
+            generated = await generate_video(
+                _video_prompt(company, variants[idx]),
+                duration_seconds=15,
+                aspect_ratio="9:16",
+            )
+            if generated:
+                resolved_videos.append(generated)
+
+    if not resolved_videos:
+        raise ValueError(
+            "video_urls_required: provide video URLs or configure OPENAI_VIDEO_MODEL/REPLICATE_API_TOKEN for auto-generation"
+        )
+
+    while len(resolved_videos) < 3:
+        resolved_videos.append(resolved_videos[-1])
+
+    return await launch_meta_campaign(
+        db=db,
+        company=company,
+        campaign_name=campaign_name or f"{company.name} Meta Ads V1",
+        daily_budget_cents=budget,
+        video_urls=resolved_videos[:3],
+        headlines=resolved_headlines,
+        bodies=resolved_bodies,
+        countries=countries or ["FR", "BE", "CH"],
+        age_min=age_min,
+        age_max=age_max,
+        call_to_action=call_to_action,
+        objective=objective,
+    )
+
+
 async def _auto_refresh_creative(
     db: AsyncSession,
     camp: AdCampaign,
@@ -277,7 +417,7 @@ async def _auto_refresh_creative(
     try:
         from app.agents.tools.generate_video import generate_video as gen_video
 
-        company_desc = company.description or company.name or "product"
+        company_desc = company.product_description or company.mission_statement or company.name or "product"
         prompt = (
             f"Professional vertical video ad (9:16) for: {old_creative.title}. "
             f"Brand: {company_desc}. "
