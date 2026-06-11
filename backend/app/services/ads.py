@@ -456,17 +456,18 @@ async def launch_ads_v1(
             if url not in resolved_videos:
                 resolved_videos.append(url)
 
-    if len(resolved_videos) < 3 and auto_generate_videos:
+    if len(resolved_videos) < 3 and auto_generate_videos and not resolved_videos:
         from app.agents.tools.generate_video import generate_video
 
-        for idx in range(len(resolved_videos), 3):
-            generated = await generate_video(
-                _video_prompt(company, variants[idx]),
-                duration_seconds=15,
-                aspect_ratio="9:16",
-            )
-            if generated:
-                resolved_videos.append(generated)
+        # For a cold start with no uploaded videos, generate one hero video first
+        # so the launch can proceed quickly, then reuse it across the first ad set.
+        generated = await generate_video(
+            _video_prompt(company, variants[0]),
+            duration_seconds=15,
+            aspect_ratio="9:16",
+        )
+        if generated:
+            resolved_videos.append(generated)
 
     if not resolved_videos:
         raise ValueError(
@@ -1305,6 +1306,8 @@ async def get_ads_summary(db: AsyncSession, company_id: str) -> dict:
             actionable_message = "Vos campagnes sont en pause. Rechargez le wallet ou relancez manuellement."
     else:
         state = "draft"
+        if any(c.name == "Preparing Meta Ads" and not c.meta_campaign_id for c in campaigns):
+            actionable_message = "Préparation des vidéos et des créas en cours. Le premier lancement peut prendre quelques minutes."
 
     state_message = STATE_MESSAGES.get(state)
 
