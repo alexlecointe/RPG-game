@@ -341,6 +341,7 @@ async def create_ad_creative(
     link_url: str,
     page_id: str | None = None,
     call_to_action: str = "SHOP_NOW",
+    thumbnail_url: str | None = None,
 ) -> dict:
     settings = get_settings()
     page = page_id or getattr(settings, "meta_page_id", "") or ""
@@ -358,6 +359,8 @@ async def create_ad_creative(
             },
         },
     }
+    if thumbnail_url:
+        object_story_spec["video_data"]["image_url"] = thumbnail_url
 
     async with httpx.AsyncClient(timeout=60) as client:
         resp = await client.post(

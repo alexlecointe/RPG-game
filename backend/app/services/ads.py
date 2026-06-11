@@ -16,6 +16,7 @@ from app.agents.tools.meta_ads_action import (
     create_ad_creative,
     create_custom_audience,
     create_lookalike_audience,
+    get_video,
     list_custom_audiences,
     upload_video,
 )
@@ -359,6 +360,7 @@ async def launch_meta_campaign(
         campaign.meta_ad_set_id = ad_set_id
 
         link_url = _get_company_site_url(company)
+        created_ad_ids: list[str] = []
 
         for i, video_url in enumerate(video_urls[:3]):
             title = headlines[i] if i < len(headlines) and headlines[i] else campaign.name
@@ -378,12 +380,21 @@ async def launch_meta_campaign(
             try:
                 video_resp = await upload_video(token, ad_account, video_url, title)
                 video_id = video_resp.get("video_id", "")
+                thumbnail_url = company.product_image_url or ""
+                if video_id:
+                    try:
+                        video_meta = await get_video(token, video_id)
+                        thumbnail_url = video_meta.get("thumbnail_url") or thumbnail_url
+                    except Exception as exc:
+                        logger.warning("meta_video_thumbnail_fetch_failed", error=str(exc), video_id=video_id)
                 if video_id and settings.meta_page_id:
                     cr_resp = await create_ad_creative(
                         token, ad_account, video_id, title, body_text, link_url,
                         call_to_action=call_to_action,
+                        thumbnail_url=thumbnail_url,
                     )
                     creative.meta_creative_id = cr_resp.get("creative_id")
+                    creative.thumbnail_url = thumbnail_url or None
                     if creative.meta_creative_id and ad_set_id:
                         ad_resp = await create_ad(
                             token,
@@ -394,6 +405,8 @@ async def launch_meta_campaign(
                             "PAUSED",
                         )
                         creative.meta_ad_id = ad_resp.get("ad_id")
+                        if creative.meta_ad_id:
+                            created_ad_ids.append(creative.meta_ad_id)
                         creative.status = "active"
                 logger.info(
                     "ad_creative_stored",
@@ -403,7 +416,25 @@ async def launch_meta_campaign(
             except Exception as exc:
                 logger.warning("meta_video_upload_failed", error=str(exc), video_url=video_url[:80])
 
-        # Activate campaign now that creatives are ready
+        # Activate delivery objects now that creatives are ready
+        if campaign.meta_ad_set_id:
+            try:
+                await client.post(
+                    f"{META_GRAPH}/{campaign.meta_ad_set_id}",
+                    data={"access_token": token, "status": "ACTIVE"},
+                )
+            except Exception as exc:
+                logger.warning("adset_activate_failed", error=str(exc), ad_set_id=campaign.meta_ad_set_id)
+
+        for ad_id in created_ad_ids:
+            try:
+                await client.post(
+                    f"{META_GRAPH}/{ad_id}",
+                    data={"access_token": token, "status": "ACTIVE"},
+                )
+            except Exception as exc:
+                logger.warning("ad_activate_failed", error=str(exc), ad_id=ad_id)
+
         if campaign.meta_campaign_id:
             try:
                 await client.post(
