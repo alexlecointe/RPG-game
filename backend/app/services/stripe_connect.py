@@ -15,6 +15,23 @@ def _headers(secret_key: str) -> dict:
     return {"Authorization": f"Bearer {secret_key}"}
 
 
+def _stripe_error_message(resp: httpx.Response) -> str:
+    try:
+        payload = resp.json()
+    except ValueError:
+        return resp.text[:500] or "unknown_stripe_error"
+
+    error = payload.get("error", {}) if isinstance(payload, dict) else {}
+    if isinstance(error, dict):
+        return (
+            error.get("message")
+            or error.get("code")
+            or error.get("type")
+            or "unknown_stripe_error"
+        )
+    return "unknown_stripe_error"
+
+
 def get_stripe_status(company: Company) -> str:
     """Return not_started | pending | ready."""
     if not company.stripe_connect_account_id:
@@ -88,7 +105,15 @@ async def ensure_connect_account(company: Company, db, country: str | None = Non
             headers=_headers(settings.stripe_secret_key),
             data=data,
         )
-        resp.raise_for_status()
+        if resp.is_error:
+            message = _stripe_error_message(resp)
+            logger.warning(
+                "stripe_connect_account_create_failed",
+                company_id=company.id,
+                status_code=resp.status_code,
+                error=message,
+            )
+            raise ValueError(f"stripe_connect_account_failed: {message}")
         account = resp.json()
 
     company.stripe_connect_account_id = account["id"]
@@ -133,7 +158,16 @@ async def create_onboarding_link(company: Company, db, country: str | None = Non
             headers=_headers(settings.stripe_secret_key),
             data=data,
         )
-        resp.raise_for_status()
+        if resp.is_error:
+            message = _stripe_error_message(resp)
+            logger.warning(
+                "stripe_connect_link_create_failed",
+                company_id=company.id,
+                account_id=account_id,
+                status_code=resp.status_code,
+                error=message,
+            )
+            raise ValueError(f"stripe_connect_link_failed: {message}")
         link = resp.json()
 
     return {"url": link.get("url", ""), "expires_at": link.get("expires_at")}
