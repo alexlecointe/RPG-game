@@ -290,6 +290,8 @@ async def launch_meta_campaign(
     act_id = ad_account if ad_account.startswith("act_") else f"act_{ad_account}"
     budget = daily_budget_cents or company.daily_ads_budget_cents or 1000
     geo = countries or ["FR"]
+    dsa_beneficiary = (settings.meta_dsa_beneficiary or company.name or "").strip()
+    dsa_payor = (settings.meta_dsa_payor or dsa_beneficiary).strip()
 
     targeting_data = {
         "geo_locations": {"countries": geo},
@@ -346,6 +348,8 @@ async def launch_meta_campaign(
                 "bid_amount": "200",
                 "status": "PAUSED",
                 "targeting": json.dumps(targeting_data),
+                "dsa_beneficiary": dsa_beneficiary,
+                "dsa_payor": dsa_payor,
             },
         )
         if resp.status_code >= 400:

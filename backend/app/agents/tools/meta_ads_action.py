@@ -263,6 +263,9 @@ async def create_ad_set(
 ) -> dict:
     act = _act_id(ad_account_id)
     geo = countries or ["FR"]
+    settings = get_settings()
+    dsa_beneficiary = (settings.meta_dsa_beneficiary or ad_set_name or "RPG Agent Company").strip()
+    dsa_payor = (settings.meta_dsa_payor or dsa_beneficiary).strip()
 
     optimization_goal = {
         "OUTCOME_SALES": "LINK_CLICKS",
@@ -293,6 +296,8 @@ async def create_ad_set(
                 "bid_amount": "200",
                 "status": status,
                 "targeting": json.dumps(targeting),
+                "dsa_beneficiary": dsa_beneficiary,
+                "dsa_payor": dsa_payor,
             },
         )
         resp.raise_for_status()

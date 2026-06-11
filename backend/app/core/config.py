@@ -61,6 +61,8 @@ class Settings(BaseSettings):
     meta_capi_token: str = ""
     meta_ad_account_id: str = ""
     meta_page_id: str = ""  # Facebook Page ID for video ad creatives
+    meta_dsa_beneficiary: str = ""  # EU ads: promoted organization/person name
+    meta_dsa_payor: str = ""  # EU ads: paying organization/person name
 
     # Backend public URL — Render services forwardent les webhooks Stripe ici
     backend_public_url: str = ""
