@@ -46,3 +46,9 @@ services:
           type: redis
           name: rpg-redis
           property: connectionString
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: STRIPE_BILLING_WEBHOOK_SECRET
+        sync: false

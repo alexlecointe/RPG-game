@@ -1302,7 +1302,7 @@ struct RetroBusinessSheet: View {
             await appState.refreshCompany()
         } catch let err as APIError {
             switch err {
-            case .http(let code, _) where code == 500:
+            case .http(_, let body) where body.contains("stripe_not_configured"):
                 stripeError = "Stripe non configuré sur ce serveur. Contactez l'admin."
             case .http(let code, let body):
                 stripeError = "Erreur \(code): \(body)"
