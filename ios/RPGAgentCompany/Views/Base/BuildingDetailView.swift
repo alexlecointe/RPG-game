@@ -461,6 +461,7 @@ struct SetupPaymentsPanel: View {
 
 struct AdCampaignCard: View {
     let campaign: AdCampaign
+    let thumbnailUrl: String?
 
     private var statusColor: Color {
         switch campaign.status {
@@ -474,7 +475,7 @@ struct AdCampaignCard: View {
         HStack(spacing: 10) {
             // Thumbnail (AsyncImage if available, grey rect fallback)
             Group {
-                if let urlStr = campaign.thumbnailUrl, let url = URL(string: urlStr) {
+                if let thumbnailUrl, let url = URL(string: thumbnailUrl) {
                     AsyncImage(url: url) { phase in
                         switch phase {
                         case .success(let img):
@@ -531,9 +532,79 @@ struct AdCampaignCard: View {
     }
 }
 
-// Extend AdCampaign with thumbnailUrl sourced from its first creative
-private extension AdCampaign {
-    var thumbnailUrl: String? { nil }
+struct AdCreativeCard: View {
+    let creative: AdCreative
+
+    private var statusColor: Color {
+        switch creative.status.lowercased() {
+        case "active": return PixelTheme.accentGreen
+        case "blocked": return PixelTheme.accentRed
+        default: return PixelTheme.textSecondary
+        }
+    }
+
+    private var mediaUrl: String? {
+        creative.thumbnailUrl ?? creative.videoUrl
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Group {
+                if let mediaUrl, let url = URL(string: mediaUrl) {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image.resizable().scaledToFill()
+                        default:
+                            thumbnailPlaceholder
+                        }
+                    }
+                } else {
+                    thumbnailPlaceholder
+                }
+            }
+            .frame(width: 52, height: 52)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(creative.title)
+                        .font(PixelTheme.captionFont)
+                        .foregroundStyle(PixelTheme.textPrimary)
+                        .lineLimit(1)
+                    Text(creative.statusDisplay)
+                        .font(PixelTheme.microFont)
+                        .foregroundStyle(statusColor)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(statusColor.opacity(0.12), in: Capsule())
+                }
+                Text("\(creative.spendFormatted) spend  \(creative.impressions.formatted()) impr  \(creative.clicks) clicks  CTR: \(creative.ctrFormatted)  CPC: \(creative.cpcFormatted)")
+                    .font(PixelTheme.microFont)
+                    .foregroundStyle(PixelTheme.textSecondary)
+                    .lineLimit(2)
+                if !creative.body.isEmpty {
+                    Text(creative.body)
+                        .font(PixelTheme.microFont)
+                        .foregroundStyle(PixelTheme.textSecondary.opacity(0.8))
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .background(PixelTheme.bgMedium, in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var thumbnailPlaceholder: some View {
+        RoundedRectangle(cornerRadius: 6)
+            .fill(PixelTheme.bgDark)
+            .overlay(
+                Image(systemName: "play.rectangle.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(PixelTheme.textSecondary.opacity(0.5))
+            )
+    }
 }
 
 // MARK: - AdsLiveDashboard (Polsia-like compact view)
@@ -564,7 +635,10 @@ struct AdsLiveDashboard: View {
             if let summary, !summary.campaigns.isEmpty {
                 VStack(spacing: 6) {
                     ForEach(summary.campaigns) { campaign in
-                        AdCampaignCard(campaign: campaign)
+                        AdCampaignCard(
+                            campaign: campaign,
+                            thumbnailUrl: summary.creatives.first(where: { $0.campaignId == campaign.id })?.thumbnailUrl
+                        )
                     }
                 }
 
@@ -985,11 +1059,21 @@ struct AdsDetailsSheet: View {
 
     private func adsListSection(summary: AdsSummary) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Your Ads (\(summary.campaigns.count))")
+            let items = summary.creatives
+            Text("Your Ads (\(items.isEmpty ? summary.campaigns.count : items.count))")
                 .font(PixelTheme.headlineFont)
                 .foregroundStyle(PixelTheme.textPrimary)
-            ForEach(summary.campaigns) { campaign in
-                AdCampaignCard(campaign: campaign)
+            if items.isEmpty {
+                ForEach(summary.campaigns) { campaign in
+                    AdCampaignCard(
+                        campaign: campaign,
+                        thumbnailUrl: summary.creatives.first(where: { $0.campaignId == campaign.id })?.thumbnailUrl
+                    )
+                }
+            } else {
+                ForEach(items) { creative in
+                    AdCreativeCard(creative: creative)
+                }
             }
         }
     }

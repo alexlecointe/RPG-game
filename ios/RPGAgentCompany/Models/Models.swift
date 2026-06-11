@@ -628,11 +628,30 @@ struct AdCreative: Codable, Identifiable {
     }
 
     var spendFormatted: String {
-        String(format: "%.2f€", Double(spendCents) / 100)
+        String(format: "$%.2f", Double(spendCents) / 100)
     }
 
     var ctrFormatted: String {
         String(format: "%.1f%%", ctr)
+    }
+
+    var cpcCents: Int {
+        guard clicks > 0 else { return 0 }
+        return spendCents / clicks
+    }
+
+    var cpcFormatted: String {
+        String(format: "$%.2f", Double(cpcCents) / 100)
+    }
+
+    var statusDisplay: String {
+        switch status.lowercased() {
+        case "active": return "Active"
+        case "paused": return "Paused"
+        case "blocked": return "Blocked"
+        case "draft": return "Draft"
+        default: return status.capitalized
+        }
     }
 }
 

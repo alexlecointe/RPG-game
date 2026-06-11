@@ -107,6 +107,7 @@ struct RetroAdsSheet: View {
                             budgetEditorSection(s)
                             spendRollupSection(s)
                             campaignsSection(s)
+                            creativesSection(s)
                         } else if isLoading {
                             loadingView
                         } else {
@@ -279,7 +280,7 @@ struct RetroAdsSheet: View {
     // MARK: - Campaigns list
 
     private func campaignsSection(_ s: AdsSummary) -> some View {
-        retroSection("VOS ADS  (\(s.campaigns.count))") {
+        retroSection("CAMPAGNES  (\(s.campaigns.count))") {
             VStack(spacing: 0) {
                 if s.campaigns.isEmpty {
                     Text("AUCUNE CAMPAGNE CRÉÉE")
@@ -300,51 +301,91 @@ struct RetroAdsSheet: View {
         }
     }
 
-    private func campaignRow(_ c: AdCampaign) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Name + status
-            HStack(spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(c.name).font(mono(11)).foregroundStyle(.white).lineLimit(1)
-                    Text(c.status.uppercased())
-                        .font(mono(8))
-                        .foregroundStyle(c.status == "active" ? .white : .white.opacity(0.4))
-                        .padding(.horizontal, 5).padding(.vertical, 2)
-                        .overlay(Rectangle().stroke(c.status == "active" ? Color.white.opacity(0.8) : Color.white.opacity(0.2), lineWidth: 1))
+    private func creativesSection(_ s: AdsSummary) -> some View {
+        retroSection("VOS ADS  (\(s.creatives.count))") {
+            VStack(spacing: 0) {
+                if s.creatives.isEmpty {
+                    Text("AUCUNE CRÉA ADS GÉNÉRÉE")
+                        .font(mono(10)).foregroundStyle(.white.opacity(0.3))
+                        .padding(12)
+                } else {
+                    ForEach(Array(s.creatives.enumerated()), id: \.element.id) { idx, creative in
+                        if idx > 0 { Rectangle().frame(height: 1).foregroundStyle(.white.opacity(0.1)) }
+                        creativeRow(creative)
+                    }
                 }
-                Spacer()
-                // Pause / Resume
-                if let action = campaignLoading[c.id] {
-                    HStack(spacing: 4) {
-                        ProgressView().tint(.white).scaleEffect(0.6)
-                        Text(action.uppercased()).font(mono(8)).foregroundStyle(.white.opacity(0.4))
+            }
+        }
+    }
+
+    private func campaignRow(_ c: AdCampaign) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Group {
+                if let thumbnailUrl = summary?.creatives.first(where: { $0.campaignId == c.id })?.thumbnailUrl,
+                   let url = URL(string: thumbnailUrl) {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFill()
+                        default:
+                            thumbnailPlaceholder
+                        }
                     }
                 } else {
-                    Button(action: { Task { await toggleCampaign(c) } }) {
-                        Text(c.status == "active" ? "⏸  PAUSE" : "▶  RESUME")
-                            .font(mono(9)).foregroundStyle(c.status == "active" ? .white : .white.opacity(0.7))
-                            .padding(.horizontal, 8).padding(.vertical, 5)
-                            .overlay(Rectangle().stroke(.white.opacity(0.4), lineWidth: 1))
-                    }
+                    thumbnailPlaceholder
                 }
             }
+            .frame(width: 52, height: 52)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
 
-            // Metrics
-            HStack(spacing: 0) {
-                metricCell("DÉPENSÉ", c.spendFormatted)
-                metricCell("IMPR.", "\(c.impressions)")
-                metricCell("CTR", c.ctrFormatted)
-                metricCell("CPC", c.cpcFormatted)
-            }
-
-            // Scale + Split actions (only for active campaigns with some spend)
-            if c.status == "active" && c.spendCents > 0 {
+            VStack(alignment: .leading, spacing: 8) {
+                // Name + status
                 HStack(spacing: 8) {
-                    campaignActionBtn("⬆  SCALE +20%", loading: campaignLoading[c.id] == "scale") {
-                        Task { await scaleCampaign(c) }
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(c.name).font(mono(11)).foregroundStyle(.white).lineLimit(1)
+                        Text(c.status.uppercased())
+                            .font(mono(8))
+                            .foregroundStyle(c.status == "active" ? .white : .white.opacity(0.4))
+                            .padding(.horizontal, 5).padding(.vertical, 2)
+                            .overlay(Rectangle().stroke(c.status == "active" ? Color.white.opacity(0.8) : Color.white.opacity(0.2), lineWidth: 1))
                     }
-                    campaignActionBtn("🏆  APPLIQUER WINNER", loading: campaignLoading[c.id] == "split") {
-                        Task { await splitCampaign(c) }
+                    Spacer()
+                    // Pause / Resume
+                    if let action = campaignLoading[c.id] {
+                        HStack(spacing: 4) {
+                            ProgressView().tint(.white).scaleEffect(0.6)
+                            Text(action.uppercased()).font(mono(8)).foregroundStyle(.white.opacity(0.4))
+                        }
+                    } else {
+                        Button(action: { Task { await toggleCampaign(c) } }) {
+                            Text(c.status == "active" ? "⏸  PAUSE" : "▶  RESUME")
+                                .font(mono(9)).foregroundStyle(c.status == "active" ? .white : .white.opacity(0.7))
+                                .padding(.horizontal, 8).padding(.vertical, 5)
+                                .overlay(Rectangle().stroke(.white.opacity(0.4), lineWidth: 1))
+                        }
+                    }
+                }
+
+                // Metrics
+                HStack(spacing: 0) {
+                    metricCell("DÉPENSÉ", c.spendFormatted)
+                    metricCell("IMPR.", "\(c.impressions)")
+                    metricCell("CLICKS", "\(c.clicks)")
+                    metricCell("CTR", c.ctrFormatted)
+                    metricCell("CPC", c.cpcFormatted)
+                }
+
+                // Scale + Split actions (only for active campaigns with some spend)
+                if c.status == "active" && c.spendCents > 0 {
+                    HStack(spacing: 8) {
+                        campaignActionBtn("⬆  SCALE +20%", loading: campaignLoading[c.id] == "scale") {
+                            Task { await scaleCampaign(c) }
+                        }
+                        campaignActionBtn("🏆  APPLIQUER WINNER", loading: campaignLoading[c.id] == "split") {
+                            Task { await splitCampaign(c) }
+                        }
                     }
                 }
             }
@@ -364,12 +405,82 @@ struct RetroAdsSheet: View {
         .disabled(loading || !campaignLoading.isEmpty)
     }
 
+    private func creativeRow(_ creative: AdCreative) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Group {
+                if let mediaUrl = creative.thumbnailUrl ?? creative.videoUrl,
+                   let url = URL(string: mediaUrl) {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .scaledToFill()
+                        default:
+                            thumbnailPlaceholder
+                        }
+                    }
+                } else {
+                    thumbnailPlaceholder
+                }
+            }
+            .frame(width: 52, height: 52)
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Text(creative.title)
+                        .font(mono(11))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                    Text(creative.status.uppercased())
+                        .font(mono(8))
+                        .foregroundStyle(creative.status.lowercased() == "active" ? .white : .white.opacity(0.4))
+                        .padding(.horizontal, 5).padding(.vertical, 2)
+                        .overlay(
+                            Rectangle().stroke(
+                                creative.status.lowercased() == "active" ? Color.white.opacity(0.8) : Color.white.opacity(0.2),
+                                lineWidth: 1
+                            )
+                        )
+                    Spacer()
+                }
+
+                HStack(spacing: 0) {
+                    metricCell("DÉPENSÉ", creative.spendFormatted)
+                    metricCell("IMPR.", "\(creative.impressions)")
+                    metricCell("CLICKS", "\(creative.clicks)")
+                    metricCell("CTR", creative.ctrFormatted)
+                    metricCell("CPC", creative.cpcFormatted)
+                }
+
+                if !creative.body.isEmpty {
+                    Text(creative.body)
+                        .font(mono(8))
+                        .foregroundStyle(.white.opacity(0.35))
+                        .lineLimit(2)
+                }
+            }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 10)
+    }
+
     private func metricCell(_ label: String, _ value: String) -> some View {
         VStack(spacing: 2) {
             Text(value).font(mono(11)).foregroundStyle(.white)
             Text(label).font(mono(7)).foregroundStyle(.white.opacity(0.35))
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private var thumbnailPlaceholder: some View {
+        RoundedRectangle(cornerRadius: 6)
+            .fill(Color.white.opacity(0.05))
+            .overlay(
+                Image(systemName: "play.rectangle.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(.white.opacity(0.25))
+            )
     }
 
     private var loadingView: some View {
