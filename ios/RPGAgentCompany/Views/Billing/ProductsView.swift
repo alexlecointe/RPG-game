@@ -152,6 +152,11 @@ private struct ProductRow: View {
                         .foregroundStyle(PixelTheme.textSecondary)
                         .lineLimit(1)
                 }
+                if product.requiresConnect == true {
+                    Text("PAYOUT EN ATTENTE — CONNECTER STRIPE")
+                        .font(PixelTheme.microFont)
+                        .foregroundStyle(PixelTheme.accent)
+                }
             }
             Spacer()
             VStack(spacing: 6) {
@@ -303,6 +308,10 @@ struct CreatePaymentLinkSheet: View {
             }
             Text("Intégrez ce lien dans votre site ou partagez-le directement.")
                 .font(PixelTheme.captionFont)
+                .foregroundStyle(PixelTheme.textSecondary)
+                .multilineTextAlignment(.center)
+            Text("Si Stripe Connect n'est pas encore prêt, les ventes passent par la plateforme et les payouts seront à finaliser après connexion.")
+                .font(PixelTheme.microFont)
                 .foregroundStyle(PixelTheme.textSecondary)
                 .multilineTextAlignment(.center)
         }

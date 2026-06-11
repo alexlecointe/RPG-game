@@ -707,6 +707,8 @@ class PaymentLink(Base):
     currency: Mapped[str] = mapped_column(String(3), default="eur")
     stripe_product_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     stripe_price_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    payout_status: Mapped[str] = mapped_column(String(32), default="connected")
+    requires_connect: Mapped[bool] = mapped_column(Boolean, default=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

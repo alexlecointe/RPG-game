@@ -106,11 +106,14 @@ async def _create_payment_link(
 ) -> dict:
     """Create a permanent Stripe Payment Link (buy.stripe.com/...) via product+price creation."""
     headers = _headers(secret_key)
+    payout_status = "connected" if connect_account_id else "platform_pending_connect"
+    requires_connect = not bool(connect_account_id)
     async with httpx.AsyncClient(timeout=30) as client:
         # Step 1 — create product
         product_data: dict[str, str] = {"name": product_name or "Product"}
         if company_slug:
             product_data["metadata[company_slug]"] = company_slug
+            product_data["metadata[payout_status]"] = payout_status
         resp = await client.post(f"{STRIPE_API}/products", headers=headers, data=product_data)
         resp.raise_for_status()
         product_id = resp.json()["id"]
@@ -132,7 +135,12 @@ async def _create_payment_link(
         }
         if company_slug:
             link_data["metadata[company_slug]"] = company_slug
+            link_data["metadata[payout_status]"] = payout_status
+            link_data["metadata[requires_connect]"] = str(requires_connect).lower()
             link_data["payment_intent_data[metadata][company_slug]"] = company_slug
+            link_data["payment_intent_data[metadata][product_name]"] = product_name or "Product"
+            link_data["payment_intent_data[metadata][payout_status]"] = payout_status
+            link_data["payment_intent_data[metadata][requires_connect]"] = str(requires_connect).lower()
         if success_url:
             link_data["after_completion[type]"] = "redirect"
             link_data["after_completion[redirect][url]"] = success_url
@@ -145,11 +153,14 @@ async def _create_payment_link(
 
     return {
         "created": True,
+        "url": link.get("url", ""),
         "payment_link_url": link.get("url", ""),
         "payment_link_id": link.get("id", ""),
         "product_id": product_id,
         "price_id": price_id,
         "amount": f"{(amount_cents or 1000) / 100:.2f} {currency.upper()}",
+        "payout_status": payout_status,
+        "requires_connect": requires_connect,
     }
 
 
@@ -174,7 +185,11 @@ async def _create_checkout_link(
     }
     if company_slug:
         data["metadata[company_slug]"] = company_slug
+        data["metadata[payout_status]"] = "connected" if connect_account_id else "platform_pending_connect"
         data["payment_intent_data[metadata][company_slug]"] = company_slug
+        data["payment_intent_data[metadata][product_name]"] = product_name or "Product"
+        data["payment_intent_data[metadata][payout_status]"] = "connected" if connect_account_id else "platform_pending_connect"
+        data["payment_intent_data[metadata][requires_connect]"] = str(not bool(connect_account_id)).lower()
     if connect_account_id:
         data["payment_intent_data[transfer_data][destination]"] = connect_account_id
 
@@ -189,6 +204,7 @@ async def _create_checkout_link(
 
     return {
         "created": True,
+        "url": session_data.get("url", ""),
         "checkout_url": session_data.get("url", ""),
         "session_id": session_data.get("id", ""),
         "amount": f"{(amount_cents or 1000) / 100:.2f} {currency.upper()}",
@@ -432,6 +448,14 @@ def create_stripe_action_tool(
         acct_id = connect_account_id or default_connect_account_id
         if not acct_id and company_slug:
             acct_id = await _get_connect_account_for_slug(company_slug)
+        if acct_id:
+            try:
+                status = await _get_connect_status(secret_key, acct_id)
+                if not (status.get("charges_enabled") and status.get("payouts_enabled")):
+                    acct_id = ""
+            except Exception as exc:
+                logger.warning("stripe_connect_status_check_failed_for_agent_link", error=str(exc))
+                acct_id = ""
         try:
             if action == "create_payment_link":
                 if not product_name or not amount_cents:
@@ -469,6 +493,8 @@ def create_stripe_action_tool(
                                         currency=currency.lower(),
                                         stripe_product_id=result.get("product_id"),
                                         stripe_price_id=result.get("price_id"),
+                                        payout_status=result.get("payout_status", "connected"),
+                                        requires_connect=bool(result.get("requires_connect", False)),
                                     ))
                                     await _db.commit()
                     except Exception as _e:

@@ -47,6 +47,8 @@ async def list_products(company_id: str, db: DbSession):
                 "payment_link_id": lnk.stripe_payment_link_id,
                 "payment_link_url": lnk.url,
                 "active": lnk.active,
+                "payout_status": lnk.payout_status,
+                "requires_connect": lnk.requires_connect,
                 "prices": [
                     {
                         "price_id": lnk.stripe_price_id,
@@ -75,6 +77,18 @@ async def create_payment_link(company_id: str, body: CreatePaymentLinkBody, db: 
         raise HTTPException(404, "Company not found")
 
     settings = get_settings()
+    connect_account_id = getattr(company, "stripe_connect_account_id", None) or ""
+    if connect_account_id:
+        try:
+            from app.services.stripe_connect import fetch_connect_status
+            status = await fetch_connect_status(connect_account_id)
+            if status.get("status") != "ready":
+                connect_account_id = ""
+        except Exception as exc:
+            logger.warning("stripe_connect_status_check_failed_for_payment_link", company_id=company_id, error=str(exc))
+            connect_account_id = ""
+    payout_status = "connected" if connect_account_id else "platform_pending_connect"
+    requires_connect = not bool(connect_account_id)
 
     if not settings.stripe_secret_key:
         mock_link_id = f"plink_mock_{body.product_name[:8].replace(' ', '_').lower()}"
@@ -86,12 +100,21 @@ async def create_payment_link(company_id: str, body: CreatePaymentLinkBody, db: 
             product_name=body.product_name,
             amount_cents=body.amount_cents,
             currency=body.currency.lower(),
+            payout_status="mock",
+            requires_connect=True,
         ))
         await db.commit()
-        return {"url": mock_url, "payment_link_id": mock_link_id, "product_id": None, "price_id": None}
+        return {
+            "url": mock_url,
+            "payment_link_url": mock_url,
+            "payment_link_id": mock_link_id,
+            "product_id": None,
+            "price_id": None,
+            "payout_status": "mock",
+            "requires_connect": True,
+        }
 
     from app.agents.tools.stripe_action import _create_payment_link
-    connect_account_id = getattr(company, "stripe_connect_account_id", None) or ""
     result = await _create_payment_link(
         secret_key=settings.stripe_secret_key,
         product_name=body.product_name,
@@ -111,6 +134,8 @@ async def create_payment_link(company_id: str, body: CreatePaymentLinkBody, db: 
         currency=body.currency.lower(),
         stripe_product_id=result.get("product_id"),
         stripe_price_id=result.get("price_id"),
+        payout_status=result.get("payout_status", payout_status),
+        requires_connect=bool(result.get("requires_connect", requires_connect)),
     ))
     await db.commit()
 

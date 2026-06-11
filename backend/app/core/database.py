@@ -78,6 +78,8 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str, str]] = [
     ("companies", "ads_winding_down", "BOOLEAN DEFAULT 0", "BOOLEAN DEFAULT FALSE"),
     ("companies", "infra_status", "VARCHAR(20) DEFAULT 'pending'", "VARCHAR(20) DEFAULT 'pending'"),
     ("companies", "product_image_url", "VARCHAR(500)", "VARCHAR(500)"),
+    ("payment_links", "payout_status", "VARCHAR(32) DEFAULT 'connected'", "VARCHAR(32) DEFAULT 'connected'"),
+    ("payment_links", "requires_connect", "BOOLEAN DEFAULT 0", "BOOLEAN DEFAULT FALSE"),
     ("quest_steps", "retry_count", "INTEGER DEFAULT 0", "INTEGER DEFAULT 0"),
     ("mission_logs", "level", "VARCHAR(10) DEFAULT 'info'", "VARCHAR(10) DEFAULT 'info'"),
     ("mission_logs", "metadata_json", "TEXT", "TEXT"),

@@ -992,10 +992,14 @@ struct StripeProduct: Codable, Identifiable {
     let description: String
     let prices: [StripePrice]
     let paymentLinkUrl: String?
+    let payoutStatus: String?
+    let requiresConnect: Bool?
 
     enum CodingKeys: String, CodingKey {
         case id, name, description, prices
         case paymentLinkUrl = "payment_link_url"
+        case payoutStatus = "payout_status"
+        case requiresConnect = "requires_connect"
     }
 }
 
