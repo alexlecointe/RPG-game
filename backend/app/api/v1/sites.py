@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from app.api.deps import DbSession
-from app.services.site_hosting import build_gateway_url, get_live_artifact
+from app.services.site_hosting import build_gateway_url, get_live_artifact, prepare_site_html_for_checkout
 
 router = APIRouter()
 
@@ -34,8 +34,10 @@ async def serve_site(slug: str, db: DbSession, request: Request):
     if request.headers.get("if-none-match") == etag:
         return Response(status_code=304)
 
+    html_content = await prepare_site_html_for_checkout(db, artifact)
+
     return HTMLResponse(
-        content=artifact.html_content,
+        content=html_content,
         status_code=200,
         headers={
             "Cache-Control": f"public, max-age={_SITE_CACHE_MAX_AGE}, stale-while-revalidate=60",

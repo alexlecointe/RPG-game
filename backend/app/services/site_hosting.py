@@ -10,6 +10,9 @@ URL pattern:
 """
 from __future__ import annotations
 
+import json
+import re
+
 import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -97,3 +100,162 @@ async def get_live_artifact(db: AsyncSession, slug: str) -> "SiteArtifact | None
         .limit(1)
     )
     return result.scalar_one_or_none()
+
+
+async def prepare_site_html_for_checkout(db: AsyncSession, artifact: "SiteArtifact") -> str:  # type: ignore[name-defined]
+    """Attach the latest Stripe Payment Link to purchase CTAs on hosted sites."""
+    payment_url = await _get_or_create_site_payment_link(db, artifact)
+    if not payment_url:
+        return artifact.html_content
+    return _inject_checkout_url(artifact.html_content, payment_url)
+
+
+async def _get_or_create_site_payment_link(db: AsyncSession, artifact: "SiteArtifact") -> str:  # type: ignore[name-defined]
+    from app.models.entities import BusinessType, Company, PaymentLink
+
+    link_result = await db.execute(
+        select(PaymentLink)
+        .where(PaymentLink.company_id == artifact.company_id, PaymentLink.active == True)  # noqa: E712
+        .order_by(PaymentLink.created_at.desc())
+        .limit(1)
+    )
+    existing_link = link_result.scalar_one_or_none()
+    if existing_link and existing_link.url:
+        return existing_link.url
+
+    company_result = await db.execute(
+        select(Company).where(Company.id == artifact.company_id).limit(1)
+    )
+    company = company_result.scalar_one_or_none()
+    if not company or company.business_type != BusinessType.ECOMMERCE:
+        return ""
+
+    amount_cents = _extract_price_cents(artifact.html_content)
+    if not amount_cents:
+        return ""
+
+    settings = get_settings()
+    if not settings.stripe_secret_key:
+        return ""
+
+    connect_account_id = getattr(company, "stripe_connect_account_id", None) or ""
+    if connect_account_id:
+        try:
+            from app.services.stripe_connect import fetch_connect_status
+
+            status = await fetch_connect_status(connect_account_id)
+            if status.get("status") != "ready":
+                connect_account_id = ""
+        except Exception as exc:
+            logger.warning(
+                "site_checkout_connect_status_failed",
+                company_id=company.id,
+                error=str(exc),
+            )
+            connect_account_id = ""
+
+    from app.agents.tools.stripe_action import _create_payment_link
+
+    result = await _create_payment_link(
+        secret_key=settings.stripe_secret_key,
+        product_name=_site_product_name(company.name, company.product_description),
+        amount_cents=amount_cents,
+        currency="eur",
+        success_url=build_gateway_url(artifact.slug) or settings.backend_public_url or "https://example.com/merci",
+        company_slug=company.slug or artifact.slug,
+        connect_account_id=connect_account_id,
+    )
+    payment_url = result.get("payment_link_url") or result.get("url") or ""
+    if not payment_url:
+        return ""
+
+    db.add(PaymentLink(
+        company_id=company.id,
+        stripe_payment_link_id=result["payment_link_id"],
+        url=payment_url,
+        product_name=_site_product_name(company.name, company.product_description),
+        amount_cents=amount_cents,
+        currency="eur",
+        stripe_product_id=result.get("product_id"),
+        stripe_price_id=result.get("price_id"),
+        payout_status=result.get("payout_status", "connected" if connect_account_id else "platform_pending_connect"),
+        requires_connect=bool(result.get("requires_connect", not bool(connect_account_id))),
+    ))
+    await db.commit()
+    logger.info("site_checkout_payment_link_created", company_id=company.id, slug=artifact.slug, url=payment_url)
+    return payment_url
+
+
+def _site_product_name(company_name: str, product_description: str | None) -> str:
+    text = (product_description or "").strip()
+    if text:
+        sentence = re.split(r"[.\n]", text, maxsplit=1)[0].strip()
+        if 3 <= len(sentence) <= 80:
+            return sentence
+    return company_name
+
+
+def _extract_price_cents(html: str) -> int | None:
+    text = re.sub(r"<[^>]+>", " ", html)
+    patterns = [
+        r"(?:€|EUR)\s*([0-9]+(?:[,.][0-9]{1,2})?)",
+        r"([0-9]+(?:[,.][0-9]{1,2})?)\s*(?:€|EUR)",
+    ]
+    for pattern in patterns:
+        for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+            value = match.group(1).replace(",", ".")
+            try:
+                cents = int(round(float(value) * 100))
+            except ValueError:
+                continue
+            if 50 <= cents <= 500_000:
+                return cents
+    return None
+
+
+def _inject_checkout_url(html: str, payment_url: str) -> str:
+    url_json = json.dumps(payment_url)
+    updated = re.sub(r"https://buy\.stripe\.com/PLACEHOLDER", payment_url, html, flags=re.IGNORECASE)
+
+    cta_words = r"(?:commander|acheter|pré[- ]?commander|pre[- ]?order|order|buy|checkout)"
+
+    def _rewrite_anchor(match: re.Match[str]) -> str:
+        attrs, body = match.group(1), match.group(2)
+        body_text = re.sub(r"<[^>]+>", " ", body)
+        if not re.search(cta_words, body_text, flags=re.IGNORECASE):
+            return match.group(0)
+        if re.search(r"\bhref\s*=", attrs, flags=re.IGNORECASE):
+            attrs = re.sub(
+                r"\bhref\s*=\s*(['\"])(?:#|/checkout|javascript:void\(0\)|)\1",
+                f'href="{payment_url}"',
+                attrs,
+                flags=re.IGNORECASE,
+            )
+        else:
+            attrs = f'{attrs} href="{payment_url}"'
+        return f"<a{attrs}>{body}</a>"
+
+    updated = re.sub(r"<a\b([^>]*)>(.*?)</a>", _rewrite_anchor, updated, flags=re.IGNORECASE | re.DOTALL)
+
+    script = f"""
+<script>
+(function () {{
+  var checkoutUrl = {url_json};
+  var words = /commander|acheter|pré[- ]?commander|pre[- ]?order|order|buy|checkout/i;
+  document.addEventListener('click', function (event) {{
+    var target = event.target && event.target.closest ? event.target.closest('a,button,[role="button"]') : null;
+    if (!target || !words.test((target.textContent || '').trim())) return;
+    var href = target.getAttribute('href') || '';
+    if (target.tagName === 'BUTTON' || !href || href === '#' || href.indexOf('javascript:') === 0 || href === '/checkout') {{
+      event.preventDefault();
+      window.location.href = checkoutUrl;
+    }}
+  }});
+}})();
+</script>"""
+    if "rpgagent-checkout-injected" in updated:
+        return updated
+    script = script.replace("<script>", '<script id="rpgagent-checkout-injected">', 1)
+    if re.search(r"</body>", updated, flags=re.IGNORECASE):
+        return re.sub(r"</body>", script + "\n</body>", updated, count=1, flags=re.IGNORECASE)
+    return updated + script
