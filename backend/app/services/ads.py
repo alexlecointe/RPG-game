@@ -325,9 +325,11 @@ async def launch_meta_campaign(
                 "objective": objective,
                 "status": "PAUSED",
                 "special_ad_categories": "[]",
+                "is_adset_budget_sharing_enabled": "false",
             },
         )
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            raise ValueError(f"meta_campaign_create_failed: {resp.text[:500]}")
         meta_campaign_id = resp.json().get("id")
         campaign.meta_campaign_id = meta_campaign_id
 
@@ -346,7 +348,8 @@ async def launch_meta_campaign(
                 "targeting": json.dumps(targeting_data),
             },
         )
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            raise ValueError(f"meta_adset_create_failed: {resp.text[:500]}")
         ad_set_id = resp.json().get("id")
         campaign.meta_ad_set_id = ad_set_id
 
