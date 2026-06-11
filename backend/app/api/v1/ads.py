@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -158,7 +159,17 @@ async def launch_ads(
 
     pending = next((campaign for campaign in placeholders if campaign.status == AdCampaignStatus.DRAFT), None)
     if pending:
-        return pending
+        created_at = getattr(pending, "created_at", None)
+        is_stale = bool(
+            created_at
+            and (datetime.now(timezone.utc) - created_at) > timedelta(minutes=15)
+        )
+        if not is_stale:
+            return pending
+        await db.delete(pending)
+        placeholders = [campaign for campaign in placeholders if campaign.id != pending.id]
+        await db.commit()
+        logger.info("ads_launch_stale_pending_cleanup", company_id=company_id, campaign_id=pending.id)
 
     # Clean up stale local placeholders from previous failed attempts. If there is
     # no Meta campaign id attached, these rows are only local "preparing" shells.
