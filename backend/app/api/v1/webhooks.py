@@ -176,15 +176,16 @@ async def _handle_stripe_event(db: AsyncSession, event_type: str, data_obj: dict
         await db.commit()
 
         from app.services.meta_capi import send_purchase_event
+        from app.services.site_hosting import build_gateway_url
         try:
-            await send_purchase_event(
-                company_id=company.id,
-                value=amount / 100,
+            capi_result = await send_purchase_event(
+                payment_intent_id=pi_id,
+                value_cents=amount,
                 currency=currency.upper(),
-                order_id=order.id,
                 customer_email=customer_email,
+                event_source_url=build_gateway_url(company.slug or ""),
             )
-            order.meta_event_sent = True
+            order.meta_event_sent = bool(capi_result.get("sent"))
             await db.commit()
         except Exception as exc:
             logger.warning("meta_capi_failed", error=str(exc))
@@ -271,15 +272,17 @@ async def _handle_stripe_event(db: AsyncSession, event_type: str, data_obj: dict
         await db.commit()
 
         from app.services.meta_capi import send_purchase_event
+        from app.services.site_hosting import build_gateway_url
         try:
-            await send_purchase_event(
-                company_id=company.id,
-                value=amount / 100,
+            event_id = pi_id or data_obj.get("id", "")
+            capi_result = await send_purchase_event(
+                payment_intent_id=event_id,
+                value_cents=amount,
                 currency=currency.upper(),
-                order_id=order.id,
                 customer_email=customer_email,
+                event_source_url=build_gateway_url(company.slug or ""),
             )
-            order.meta_event_sent = True
+            order.meta_event_sent = bool(capi_result.get("sent"))
             await db.commit()
         except Exception as exc:
             logger.warning("meta_capi_checkout_failed", error=str(exc))

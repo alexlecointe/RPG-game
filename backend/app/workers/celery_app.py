@@ -369,7 +369,7 @@ async def _charge_ads_wallets_async() -> dict:
 
     from app.core.database import SessionLocal
     from app.models.entities import AdCampaign, AdCampaignStatus, Company
-    from app.services.billing import charge_ads_wallet_stripe
+    from app.services.ads import run_ads_daily_cycle
 
     logger = structlog.get_logger()
     charged = 0
@@ -390,18 +390,20 @@ async def _charge_ads_wallets_async() -> dict:
 
         for company in companies:
             try:
-                res = await charge_ads_wallet_stripe(db, company)
-                if res.get("skipped"):
+                res = await run_ads_daily_cycle(db, company.id, charge_wallet=True)
+                charge_res = res.get("charged") or {}
+                if charge_res.get("skipped"):
                     skipped += 1
                 else:
                     charged += 1
                     logger.info(
-                        "ads_daily_charge_done",
+                        "ads_daily_cycle_done",
                         company_id=company.id,
-                        charged_cents=res.get("charged_cents"),
+                        state=res.get("state"),
+                        charged_cents=charge_res.get("charged_cents"),
                     )
             except Exception as exc:
-                logger.warning("ads_daily_charge_error", company_id=company.id, error=str(exc))
+                logger.warning("ads_daily_cycle_error", company_id=company.id, error=str(exc))
                 skipped += 1
 
     return {"charged": charged, "skipped": skipped}

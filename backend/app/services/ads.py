@@ -24,6 +24,7 @@ from app.models.entities import (
     CompanyAsset,
     CompanyNotification,
     NotificationType,
+    Order,
     WalletTransaction,
 )
 from app.services.site_hosting import build_gateway_url as _build_site_url_gateway
@@ -119,11 +120,50 @@ STATE_MESSAGES: dict[str, str] = {
     "stale_no_delivery": "Campaign has been live for 48h+ with zero spend. Check your targeting, creative, or billing setup.",
     "card_expired": "Your payment method has expired. Update your card to resume daily top-ups.",
     "payment_method_missing": "No payment method on file. Add a card to enable daily ad spend.",
+    "budget_exhausted": "Your ads wallet is exhausted. The next daily top-up must succeed to keep delivery healthy.",
     "no_campaigns": "No ad campaigns yet. Ask the Marketer agent to launch your first Meta Ads campaign.",
     "draft": "Campaign draft created. The Marketer agent will activate it once creatives are ready.",
+    "scale_suggested": "A campaign is performing well. Review the suggested budget increase before scaling.",
 }
 
 SPLIT_TEST_MIN_HOURS = 120  # 5 days before surfacing split test observation
+
+
+def _action_type_value(action: dict, action_type: str) -> int:
+    if not isinstance(action, dict):
+        return 0
+    if action.get("action_type") != action_type:
+        return 0
+    try:
+        return int(float(action.get("value", 0) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _parse_actions(actions: list[dict] | None) -> tuple[int, int]:
+    """Return (purchases, add_to_cart) from Meta action rows."""
+    purchases = 0
+    add_to_cart = 0
+    for action in actions or []:
+        purchases += _action_type_value(action, "purchase")
+        purchases += _action_type_value(action, "offsite_conversion.fb_pixel_purchase")
+        add_to_cart += _action_type_value(action, "add_to_cart")
+        add_to_cart += _action_type_value(action, "offsite_conversion.fb_pixel_add_to_cart")
+    return purchases, add_to_cart
+
+
+async def _notify_ads(
+    db: AsyncSession,
+    company_id: str,
+    title: str,
+    message: str,
+) -> None:
+    db.add(CompanyNotification(
+        company_id=company_id,
+        type=NotificationType.ADS,
+        title=title,
+        message=message,
+    ))
 
 
 async def set_daily_budget(db: AsyncSession, company_id: str, budget_cents: int) -> Company:
@@ -299,7 +339,6 @@ async def launch_meta_campaign(
                 logger.warning("campaign_activate_failed", error=str(exc))
 
     campaign.status = AdCampaignStatus.ACTIVE
-    company.ads_wallet_balance_cents = (company.ads_wallet_balance_cents or 0) - budget
     await db.commit()
     await db.refresh(campaign)
     return campaign
@@ -683,7 +722,7 @@ async def _apply_split_test(
                 company_id=company_id,
                 type=NotificationType.ADS,
                 title="Split test — résultat disponible",
-                body=(
+                message=(
                     f"Campagne \"{camp.name}\" : après {int(SPLIT_TEST_MIN_HOURS / 24)} jours, "
                     f"la pub \"{winner_name}\" semble la plus performante"
                     + (f" ({loser_count} autre(s) sous-performante(s))" if loser_count else "")
@@ -736,7 +775,7 @@ async def monitor_campaigns(db: AsyncSession, company_id: str) -> list[AdSnapsho
                     f"{META_GRAPH}/{camp.meta_campaign_id}/insights",
                     params={
                         "access_token": token,
-                        "fields": "spend,impressions,clicks,ctr,cpc,purchase_roas,reach,frequency,video_30_sec_viewed,video_thruplay_watched",
+                        "fields": "spend,impressions,clicks,ctr,cpc,purchase_roas,actions,reach,frequency,video_30_sec_viewed,video_thruplay_watched",
                         "date_preset": "last_7_days",
                     },
                 )
@@ -754,6 +793,7 @@ async def monitor_campaigns(db: AsyncSession, company_id: str) -> list[AdSnapsho
                 frequency = float(row.get("frequency", 0) or 0)
                 video_views = int(row.get("video_30_sec_viewed", 0) or 0)
                 thruplay = int(row.get("video_thruplay_watched", 0) or 0)
+                purchases, add_to_cart = _parse_actions(row.get("actions", []) or [])
 
                 # ROAS: sum of purchase_roas values
                 roas_list = row.get("purchase_roas", []) or []
@@ -787,7 +827,7 @@ async def monitor_campaigns(db: AsyncSession, company_id: str) -> list[AdSnapsho
                     clicks=clicks,
                     ctr=ctr,
                     cpc_cents=camp.cpc_cents,
-                    note=f"Monitor {now.isoformat()}",
+                    note=f"Monitor {now.isoformat()} purchases={purchases} add_to_cart={add_to_cart}",
                 )
                 db.add(snap)
                 snapshots.append(snap)
@@ -796,6 +836,7 @@ async def monitor_campaigns(db: AsyncSession, company_id: str) -> list[AdSnapsho
                 new_spend = camp.spend_cents or 0
                 if new_spend > prev_spend and company:
                     delta = new_spend - prev_spend
+                    company.ads_wallet_balance_cents = (company.ads_wallet_balance_cents or 0) - delta
                     txn = WalletTransaction(
                         company_id=company_id,
                         amount_cents=-delta,
@@ -823,13 +864,12 @@ async def monitor_campaigns(db: AsyncSession, company_id: str) -> list[AdSnapsho
                         except Exception:
                             pass
                     if company:
-                        notif = CompanyNotification(
-                            company_id=company_id,
-                            type=NotificationType.ADS,
-                            title="Campagne en pause",
-                            body=f"La campagne \"{camp.name}\" n'a eu aucune dépense après {int(hours_alive)}h. Vérifiez votre creative ou votre ciblage.",
+                        await _notify_ads(
+                            db,
+                            company_id,
+                            "Campagne en pause",
+                            f"La campagne \"{camp.name}\" n'a eu aucune dépense après {int(hours_alive)}h. Vérifiez votre creative ou votre ciblage.",
                         )
-                        db.add(notif)
                     logger.warning("ads_trigger_underperforming", campaign_id=camp.id)
                     continue
 
@@ -847,13 +887,12 @@ async def monitor_campaigns(db: AsyncSession, company_id: str) -> list[AdSnapsho
                         if "DISAPPROVED" in eff_status or "POLICY" in eff_status:
                             camp.status = AdCampaignStatus.BLOCKED
                             if company:
-                                notif = CompanyNotification(
-                                    company_id=company_id,
-                                    type=NotificationType.ADS,
-                                    title="Creative bloquée par Meta",
-                                    body=f"La campagne \"{camp.name}\" a été bloquée pour violation de politique. Une nouvelle creative est générée automatiquement.",
+                                await _notify_ads(
+                                    db,
+                                    company_id,
+                                    "Creative bloquée par Meta",
+                                    f"La campagne \"{camp.name}\" a été bloquée pour violation de politique. Une nouvelle creative est générée automatiquement.",
                                 )
-                                db.add(notif)
                             logger.warning("ads_trigger_delivery_blocked", campaign_id=camp.id)
                             # Auto-refresh creative immediately
                             ad_account = settings.meta_ad_account_id or ""
@@ -876,19 +915,26 @@ async def monitor_campaigns(db: AsyncSession, company_id: str) -> list[AdSnapsho
                         < TRIGGER_SCALE_NOTIFY_INTERVAL_H * 3600
                     )
                     if not already_notified_recently:
-                        notif = CompanyNotification(
-                            company_id=company_id,
-                            type=NotificationType.ADS,
-                            title="Scaling recommandé",
-                            body=(
+                        await _notify_ads(
+                            db,
+                            company_id,
+                            "Scaling recommandé",
+                            (
                                 f"La campagne \"{camp.name}\" a un ROAS de {purchase_roas:.1f}x "
                                 f"et ${(camp.spend_cents or 0) / 100:.0f} de dépenses. "
                                 "Tu peux augmenter ton budget pour maximiser les résultats."
                             ),
                         )
-                        db.add(notif)
                         camp.last_scale_notified_at = now
                         logger.info("ads_trigger_roas_scale", campaign_id=camp.id, roas=purchase_roas)
+
+                # Trigger 4 — BUDGET_EXHAUSTED: owner must fix billing/top-up.
+                if company and (company.ads_wallet_balance_cents or 0) <= 0 and company.daily_ads_budget_cents > 0:
+                    logger.warning(
+                        "ads_trigger_budget_exhausted",
+                        campaign_id=camp.id,
+                        wallet=company.ads_wallet_balance_cents,
+                    )
 
                 # Split test J5 — ad-level performance analysis
                 if hours_alive >= SPLIT_TEST_MIN_HOURS and camp.meta_ad_set_id:
@@ -897,9 +943,62 @@ async def monitor_campaigns(db: AsyncSession, company_id: str) -> list[AdSnapsho
             except Exception as exc:
                 logger.warning("ads_monitor_failed", campaign_id=camp.id, error=str(exc))
 
-    if snapshots:
-        await db.commit()
+    await db.commit()
     return snapshots
+
+
+async def run_ads_daily_cycle(
+    db: AsyncSession,
+    company_id: str,
+    charge_wallet: bool = True,
+) -> dict:
+    """Polsia-like daily ads loop: top up, monitor, summarize, and notify."""
+    company = await db.get(Company, company_id)
+    if not company:
+        return {"skipped": True, "reason": "company_not_found"}
+
+    charge_result: dict | None = None
+    active_result = await db.execute(
+        select(AdCampaign).where(
+            AdCampaign.company_id == company_id,
+            AdCampaign.status == AdCampaignStatus.ACTIVE,
+        )
+    )
+    active_campaigns = list(active_result.scalars().all())
+
+    if charge_wallet and active_campaigns and not company.ads_winding_down:
+        try:
+            from app.services.billing import charge_ads_wallet_stripe
+            charge_result = await charge_ads_wallet_stripe(db, company)
+        except Exception as exc:
+            charge_result = {"skipped": True, "reason": "charge_error", "message": str(exc)}
+            logger.warning("ads_daily_cycle_charge_failed", company_id=company_id, error=str(exc))
+
+    snapshots = await monitor_campaigns(db, company_id)
+    summary = await get_ads_summary(db, company_id)
+
+    if active_campaigns or summary["owner_actionable"]:
+        title = "Rapport Ads quotidien"
+        if summary["owner_actionable"]:
+            title = "Action requise sur les Ads"
+        message = (
+            f"Etat: {summary['state']}. "
+            f"Spend 7j: ${summary['total_spend_cents'] / 100:.2f}. "
+            f"CTR: {summary['ctr']:.1f}%. "
+            f"ROAS: {summary.get('purchase_roas', 0):.1f}x."
+        )
+        if summary.get("actionable_message"):
+            message = f"{message} {summary['actionable_message']}"
+        await _notify_ads(db, company_id, title, message)
+        await db.commit()
+
+    return {
+        "company_id": company_id,
+        "charged": charge_result,
+        "snapshots": len(snapshots),
+        "state": summary["state"],
+        "owner_actionable": summary["owner_actionable"],
+    }
 
 
 async def get_ads_summary(db: AsyncSession, company_id: str) -> dict:
@@ -918,12 +1017,34 @@ async def get_ads_summary(db: AsyncSession, company_id: str) -> dict:
     )
     creatives = list(creative_result.scalars().all())
 
+    order_result = await db.execute(
+        select(Order).where(Order.company_id == company_id)
+    )
+    orders = list(order_result.scalars().all())
+
     # Aggregate metrics
     total_spend_cents = sum(c.spend_cents or 0 for c in campaigns)
     total_impressions = sum(c.impressions or 0 for c in campaigns)
     total_clicks = sum(c.clicks or 0 for c in campaigns)
+    total_reach = sum(c.reach or 0 for c in campaigns)
+    total_video_views = sum(c.video_views or 0 for c in campaigns)
+    total_video_thruplays = sum(c.video_thruplay_watched or 0 for c in campaigns)
+    active_frequency_values = [c.frequency or 0 for c in campaigns if c.frequency]
+    avg_frequency = (
+        sum(active_frequency_values) / len(active_frequency_values)
+        if active_frequency_values else 0.0
+    )
+    total_revenue_cents = sum(o.amount_cents or 0 for o in orders)
+    total_purchases = len(orders)
     ctr = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0.0
     cpc_cents = (total_spend_cents // total_clicks) if total_clicks > 0 else 0
+    campaign_roas_values = [c.purchase_roas or 0 for c in campaigns if c.purchase_roas]
+    meta_purchase_roas = (
+        sum(campaign_roas_values) / len(campaign_roas_values)
+        if campaign_roas_values else 0.0
+    )
+    order_roas = (total_revenue_cents / total_spend_cents) if total_spend_cents > 0 else 0.0
+    purchase_roas = round(meta_purchase_roas or order_roas, 2)
 
     # 7-day spend rollup from AdSnapshot (1 value per day)
     spend_rollup_7d = await _compute_spend_rollup_7d(db, company_id)
@@ -934,6 +1055,7 @@ async def get_ads_summary(db: AsyncSession, company_id: str) -> dict:
     paused_camps = [c for c in campaigns if c.status == AdCampaignStatus.PAUSED]
 
     wallet = company.ads_wallet_balance_cents or 0
+    daily_budget = company.daily_ads_budget_cents or 0
 
     owner_actionable = False
     actionable_message = None
@@ -966,8 +1088,16 @@ async def get_ads_summary(db: AsyncSession, company_id: str) -> dict:
             state = "stale_no_delivery"
             owner_actionable = True
             actionable_message = "Campagne active depuis 48h+ sans dépense. Vérifiez le ciblage ou les créatifs."
+        elif wallet <= 0 and daily_budget > 0:
+            state = "budget_exhausted"
+            owner_actionable = True
+            actionable_message = "Le wallet ads est épuisé. Vérifiez que la recharge quotidienne Stripe passe bien."
         elif youngest < 48:
             state = "warming_up"
+        elif any((c.purchase_roas or 0) >= TRIGGER_ROAS_SCALE_THRESHOLD for c in active_camps):
+            state = "scale_suggested"
+            owner_actionable = True
+            actionable_message = "Une campagne dépasse le seuil ROAS. Validez une hausse de budget ou un lookalike."
         else:
             state = "running"
     elif paused_camps:
@@ -984,7 +1114,15 @@ async def get_ads_summary(db: AsyncSession, company_id: str) -> dict:
 
     state_message = STATE_MESSAGES.get(state)
 
-    daily_budget = company.daily_ads_budget_cents or 0
+    agent_view = {
+        "customer_framing": state_message,
+        "owner_actionable": owner_actionable,
+        "balance_usd_to_show": round(wallet / 100, 2),
+        "next_best_action": actionable_message or (
+            "Laissez Meta apprendre pendant 48-72h."
+            if state == "warming_up" else "Surveillez les performances."
+        ),
+    }
 
     return {
         "state": state,
@@ -994,6 +1132,13 @@ async def get_ads_summary(db: AsyncSession, company_id: str) -> dict:
         "total_spend_cents": total_spend_cents,
         "total_impressions": total_impressions,
         "total_clicks": total_clicks,
+        "total_reach": total_reach,
+        "avg_frequency": round(avg_frequency, 2),
+        "total_video_views": total_video_views,
+        "total_video_thruplays": total_video_thruplays,
+        "total_purchases": total_purchases,
+        "total_revenue_cents": total_revenue_cents,
+        "purchase_roas": purchase_roas,
         "ctr": round(ctr, 2),
         "cpc_cents": cpc_cents,
         "spend_rollup_7d": spend_rollup_7d,
@@ -1001,6 +1146,7 @@ async def get_ads_summary(db: AsyncSession, company_id: str) -> dict:
         "creatives": creatives,
         "owner_actionable": owner_actionable,
         "actionable_message": actionable_message,
+        "agent_view": agent_view,
     }
 
 

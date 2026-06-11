@@ -15,6 +15,7 @@ from app.services.ads import (
     get_wallet_transactions,
     launch_ads_v1,
     monitor_campaigns,
+    run_ads_daily_cycle,
     set_daily_budget,
 )
 from app.services.company import CompanyService
@@ -53,6 +54,15 @@ async def charge_wallet(company_id: str, db: DbSession):
         raise HTTPException(404, "Company not found")
     added = await charge_ads_wallet(db, company)
     return {"added_cents": added, "balance_cents": company.ads_wallet_balance_cents}
+
+
+@router.post("/companies/{company_id}/ads/daily-cycle")
+async def ads_daily_cycle(company_id: str, db: DbSession):
+    """Manually run the Polsia-like ads daily cycle for QA/testing."""
+    try:
+        return await run_ads_daily_cycle(db, company_id, charge_wallet=True)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
 
 
 @router.post("/companies/{company_id}/ads/launch", response_model=AdCampaignOut)

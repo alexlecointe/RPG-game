@@ -681,6 +681,13 @@ struct AdsSummary: Codable {
     let totalSpendCents: Int
     let totalImpressions: Int
     let totalClicks: Int
+    let totalReach: Int?
+    let avgFrequency: Double?
+    let totalVideoViews: Int?
+    let totalVideoThruplays: Int?
+    let totalPurchases: Int?
+    let totalRevenueCents: Int?
+    let purchaseRoas: Double?
     let ctr: Double
     let cpcCents: Int
     let spendRollup7d: [Int]
@@ -698,6 +705,13 @@ struct AdsSummary: Codable {
         case spendRollup7d = "spend_rollup_7d"
         case totalImpressions = "total_impressions"
         case totalClicks = "total_clicks"
+        case totalReach = "total_reach"
+        case avgFrequency = "avg_frequency"
+        case totalVideoViews = "total_video_views"
+        case totalVideoThruplays = "total_video_thruplays"
+        case totalPurchases = "total_purchases"
+        case totalRevenueCents = "total_revenue_cents"
+        case purchaseRoas = "purchase_roas"
         case cpcCents = "cpc_cents"
         case ownerActionable = "owner_actionable"
         case actionableMessage = "actionable_message"
@@ -711,6 +725,8 @@ struct AdsSummary: Codable {
         case "warming_up": return "Learning"
         case "delivery_blocked": return "Blocked"
         case "stale_no_delivery": return "No Delivery"
+        case "budget_exhausted": return "Budget Empty"
+        case "scale_suggested": return "Scale Suggested"
         case "card_expired": return "Card Expired"
         case "payment_method_missing": return "Payment Missing"
         case "no_campaigns": return "No Campaigns"
@@ -722,10 +738,9 @@ struct AdsSummary: Codable {
     var stateColor: String {
         switch state {
         case "running": return "green"
-        case "warming_up": return "orange"
-        case "winding_down": return "orange"
+        case "warming_up", "winding_down", "scale_suggested": return "orange"
         case "delivery_blocked", "stale_no_delivery",
-             "card_expired", "payment_method_missing": return "red"
+             "budget_exhausted", "card_expired", "payment_method_missing": return "red"
         case "paused": return "gray"
         default: return "gray"
         }
@@ -741,6 +756,14 @@ struct AdsSummary: Codable {
 
     var totalSpendFormatted: String {
         String(format: "$%.2f", Double(totalSpendCents) / 100)
+    }
+
+    var totalRevenueFormatted: String {
+        String(format: "$%.2f", Double(totalRevenueCents ?? 0) / 100)
+    }
+
+    var purchaseRoasFormatted: String {
+        String(format: "%.1f×", purchaseRoas ?? 0)
     }
 
     var ctrFormatted: String {

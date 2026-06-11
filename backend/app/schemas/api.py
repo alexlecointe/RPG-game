@@ -394,13 +394,21 @@ class AdsSummaryOut(BaseModel):
     total_spend_cents: int
     total_impressions: int
     total_clicks: int
+    total_reach: int = 0
+    avg_frequency: float = 0.0
+    total_video_views: int = 0
+    total_video_thruplays: int = 0
+    total_purchases: int = 0
+    total_revenue_cents: int = 0
+    purchase_roas: float = 0.0
     ctr: float
     cpc_cents: int
-    spend_rollup_7d: list[int] = []
+    spend_rollup_7d: list[int] = Field(default_factory=list)
     campaigns: list[AdCampaignOut]
     creatives: list[AdCreativeOut]
     owner_actionable: bool
     actionable_message: Optional[str] = None
+    agent_view: dict = Field(default_factory=dict)
 
     model_config = {"from_attributes": True}
 
