@@ -204,6 +204,7 @@ class AdminOverview(BaseModel):
 class AdminCompanyRow(BaseModel):
     id: str
     name: str
+    slug: Optional[str] = None
     business_type: str
     level: int
     mission_count: int

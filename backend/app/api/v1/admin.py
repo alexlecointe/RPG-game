@@ -22,6 +22,12 @@ from app.schemas.api import (
 router = APIRouter(prefix="/admin", dependencies=[Depends(verify_api_key)])
 
 
+def _business_type_value(value: object) -> str:
+    if value is None:
+        return "unknown"
+    return getattr(value, "value", str(value))
+
+
 @router.post("/infra/provision/{slug}")
 async def admin_provision_company(slug: str):
     """Test + run infra provisioning for a company slug. Returns full result."""
@@ -162,7 +168,8 @@ async def admin_companies(
         AdminCompanyRow(
             id=c.id,
             name=c.name,
-            business_type=c.business_type.value,
+            slug=c.slug,
+            business_type=_business_type_value(c.business_type),
             level=c.level,
             mission_count=mc,
             total_tokens=tt,
