@@ -44,8 +44,21 @@ GENERATE_VIDEO_SCHEMA = {
     "required": ["prompt"],
 }
 
-OPENAI_VIDEO_API = "https://api.openai.com/v1/videos/generations"
+OPENAI_VIDEO_API = "https://api.openai.com/v1/videos"
 REPLICATE_API = "https://api.replicate.com/v1/predictions"
+
+
+def _openai_seconds(duration: int) -> str:
+    allowed = [4, 8, 12]
+    return str(min(allowed, key=lambda seconds: abs(seconds - duration)))
+
+
+def _openai_size(aspect_ratio: str) -> str:
+    if aspect_ratio == "16:9":
+        return "1280x720"
+    if aspect_ratio == "1:1":
+        return "720x1280"
+    return "720x1280"
 
 
 async def _generate_via_openai(
@@ -61,21 +74,17 @@ async def _generate_via_openai(
 
     headers = {
         "Authorization": f"Bearer {settings.openai_api_key}",
-        "Content-Type": "application/json",
     }
 
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             OPENAI_VIDEO_API,
             headers=headers,
-            json={
-                "model": settings.openai_video_model,
-                "prompt": prompt,
-                "duration": min(30, max(5, duration)),
-                "size": "1080x1920" if aspect_ratio == "9:16" else (
-                    "1920x1080" if aspect_ratio == "16:9" else "1080x1080"
-                ),
-                "n": 1,
+            files={
+                "model": (None, settings.openai_video_model),
+                "prompt": (None, prompt),
+                "seconds": (None, _openai_seconds(duration)),
+                "size": (None, _openai_size(aspect_ratio)),
             },
         )
         if resp.status_code not in (200, 202):
@@ -87,11 +96,6 @@ async def _generate_via_openai(
             return None
 
         data = resp.json()
-
-    # Immediate result (synchronous model response)
-    if data.get("status") == "completed" and data.get("data"):
-        video_data = data["data"][0]
-        return video_data.get("url") or video_data.get("b64_json")
 
     # Async job — poll by job id
     job_id = data.get("id")
@@ -113,12 +117,8 @@ async def _generate_via_openai(
             result = poll.json()
             status = result.get("status", "")
             if status == "completed":
-                video_list = result.get("data", [])
-                if video_list:
-                    url = video_list[0].get("url") or video_list[0].get("b64_json")
-                    logger.info("openai_video_completed", job_id=job_id, attempt=attempt)
-                    return url
-                return None
+                logger.info("openai_video_completed", job_id=job_id, attempt=attempt)
+                return f"{OPENAI_VIDEO_API}/{job_id}/content"
             if status in ("failed", "cancelled"):
                 logger.warning(
                     "openai_video_failed",

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -117,6 +118,29 @@ async def _store_ad_video_asset(company: Company, video_url: str, idx: int) -> s
 
     if not settings.r2_configured:
         return video_url
+
+    if "api.openai.com/v1/videos/" in video_url and "/content" in video_url:
+        if not settings.openai_api_key:
+            raise ValueError("openai_api_key_required_for_video_download")
+
+        try:
+            async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+                resp = await client.get(
+                    video_url,
+                    headers={"Authorization": f"Bearer {settings.openai_api_key}"},
+                )
+                resp.raise_for_status()
+                content = resp.content
+        except Exception as exc:
+            raise ValueError(f"openai_video_download_failed: {exc}") from exc
+
+        try:
+            from app.services.r2_storage import upload_bytes
+
+            storage_key = f"{company.id}/video/meta-ad-{idx + 1}-{uuid.uuid4().hex[:8]}.mp4"
+            return upload_bytes(storage_key, content, "video/mp4")
+        except Exception as exc:
+            raise ValueError(f"video_store_failed: {exc}") from exc
 
     from app.agents.tools.store_asset import _execute_store_asset
 
