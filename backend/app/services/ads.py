@@ -1320,8 +1320,8 @@ async def _reconcile_meta_campaign_objects(
         return {"changed": False, "reason": "no_meta_campaign_id"}
 
     needs_adset = not campaign.meta_ad_set_id
-    needs_ads = any(not creative.meta_ad_id or not creative.meta_creative_id for creative in creatives)
-    if not needs_adset and not needs_ads:
+    should_fetch_ads = bool(creatives)
+    if not needs_adset and not should_fetch_ads:
         return {"changed": False, "reason": "already_synced"}
 
     settings = get_settings()
@@ -1348,7 +1348,7 @@ async def _reconcile_meta_campaign_objects(
                     campaign.meta_ad_set_id = adsets[0].get("id")
                     changed = True
 
-            if campaign.meta_ad_set_id and needs_ads:
+            if campaign.meta_ad_set_id and should_fetch_ads:
                 resp = await client.get(
                     f"{META_GRAPH}/{campaign.meta_ad_set_id}/ads",
                     params={
@@ -1364,13 +1364,20 @@ async def _reconcile_meta_campaign_objects(
                     ad = ads_by_name.get(creative.title)
                     if not ad:
                         continue
-                    creative.meta_ad_id = creative.meta_ad_id or ad.get("id")
+                    meta_ad_id = ad.get("id")
                     meta_creative = ad.get("creative") or {}
-                    creative.meta_creative_id = creative.meta_creative_id or meta_creative.get("id")
-                    meta_status = str(ad.get("status") or "").lower()
-                    if meta_status:
+                    meta_creative_id = meta_creative.get("id")
+                    meta_status = str(ad.get("effective_status") or ad.get("status") or "").lower()
+
+                    if meta_ad_id and creative.meta_ad_id != meta_ad_id:
+                        creative.meta_ad_id = meta_ad_id
+                        changed = True
+                    if meta_creative_id and creative.meta_creative_id != meta_creative_id:
+                        creative.meta_creative_id = meta_creative_id
+                        changed = True
+                    if meta_status and creative.status != meta_status:
                         creative.status = meta_status
-                    changed = True
+                        changed = True
                     synced_ads += 1
 
         if changed:

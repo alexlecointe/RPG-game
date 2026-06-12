@@ -357,6 +357,7 @@ class AdCampaignOut(BaseModel):
     ctr: float
     cpc_cents: int
     meta_campaign_id: Optional[str] = None
+    meta_ad_set_id: Optional[str] = None
     targeting_json: Optional[str] = None
     objective: Optional[str] = None
     call_to_action: Optional[str] = None
@@ -377,6 +378,8 @@ class AdCreativeOut(BaseModel):
     body: str
     video_url: Optional[str] = None
     thumbnail_url: Optional[str] = None
+    meta_ad_id: Optional[str] = None
+    meta_creative_id: Optional[str] = None
     status: str
     spend_cents: int
     impressions: int
