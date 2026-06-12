@@ -1314,22 +1314,23 @@ async def _reconcile_meta_campaign_objects(
     db: AsyncSession,
     campaign: AdCampaign,
     creatives: list[AdCreative],
-) -> None:
+) -> dict:
     """Fill local Meta ids when a launch created objects but did not persist every id."""
     if not campaign.meta_campaign_id:
-        return
+        return {"changed": False, "reason": "no_meta_campaign_id"}
 
     needs_adset = not campaign.meta_ad_set_id
     needs_ads = any(not creative.meta_ad_id or not creative.meta_creative_id for creative in creatives)
     if not needs_adset and not needs_ads:
-        return
+        return {"changed": False, "reason": "already_synced"}
 
     settings = get_settings()
     token = settings.meta_capi_token
     if not token:
-        return
+        return {"changed": False, "reason": "meta_token_missing"}
 
     changed = False
+    synced_ads = 0
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             if needs_adset:
@@ -1370,9 +1371,19 @@ async def _reconcile_meta_campaign_objects(
                     if meta_status:
                         creative.status = meta_status
                     changed = True
+                    synced_ads += 1
 
         if changed:
             await db.commit()
+            await db.refresh(campaign)
+            for creative in creatives:
+                await db.refresh(creative)
+        return {
+            "changed": changed,
+            "meta_campaign_id": campaign.meta_campaign_id,
+            "meta_ad_set_id": campaign.meta_ad_set_id,
+            "synced_ads": synced_ads,
+        }
     except Exception as exc:
         logger.warning(
             "meta_campaign_reconcile_failed",
@@ -1380,6 +1391,7 @@ async def _reconcile_meta_campaign_objects(
             meta_campaign_id=campaign.meta_campaign_id,
             error=str(exc),
         )
+        return {"changed": False, "reason": "meta_error", "error": str(exc)}
 
 
 async def get_ads_summary(db: AsyncSession, company_id: str) -> dict:
@@ -1545,6 +1557,43 @@ async def get_ads_summary(db: AsyncSession, company_id: str) -> dict:
         "owner_actionable": owner_actionable,
         "actionable_message": actionable_message,
         "agent_view": agent_view,
+    }
+
+
+async def reconcile_company_ads_with_meta(db: AsyncSession, company_id: str) -> dict:
+    """Explicitly reconcile the current visible local campaign with Meta objects."""
+    result = await db.execute(
+        select(AdCampaign).where(AdCampaign.company_id == company_id)
+    )
+    campaigns = list(result.scalars().all())
+    visible_campaigns = _visible_ads_campaigns(campaigns)
+    if not visible_campaigns:
+        return {"reconciled": False, "reason": "no_visible_campaign"}
+
+    campaign = visible_campaigns[0]
+    creative_result = await db.execute(
+        select(AdCreative).where(AdCreative.campaign_id == campaign.id)
+    )
+    creatives = list(creative_result.scalars().all())
+    reconcile_result = await _reconcile_meta_campaign_objects(db, campaign, creatives)
+    return {
+        "reconciled": bool(reconcile_result.get("changed")),
+        "campaign_id": campaign.id,
+        "campaign_name": campaign.name,
+        "meta_campaign_id": campaign.meta_campaign_id,
+        "meta_ad_set_id": campaign.meta_ad_set_id,
+        "creative_count": len(creatives),
+        "creatives": [
+            {
+                "id": creative.id,
+                "title": creative.title,
+                "status": creative.status,
+                "meta_ad_id": creative.meta_ad_id,
+                "meta_creative_id": creative.meta_creative_id,
+            }
+            for creative in creatives
+        ],
+        "meta": reconcile_result,
     }
 
 

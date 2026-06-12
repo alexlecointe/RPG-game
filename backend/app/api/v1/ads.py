@@ -21,6 +21,7 @@ from app.services.ads import (
     get_wallet_transactions,
     launch_ads_v1,
     monitor_campaigns,
+    reconcile_company_ads_with_meta,
     run_ads_daily_cycle,
     set_daily_budget,
 )
@@ -286,6 +287,16 @@ async def cleanup_ads(company_id: str, db: DbSession):
     if not company:
         raise HTTPException(404, "Company not found")
     return await cleanup_ads_test_rows(db, company_id)
+
+
+@router.post("/companies/{company_id}/ads/reconcile-meta")
+async def reconcile_ads_meta(company_id: str, db: DbSession):
+    """Repair local Meta ids when Meta objects exist but local rows missed the ids."""
+    svc = CompanyService(db)
+    company = await svc.get_company(company_id)
+    if not company:
+        raise HTTPException(404, "Company not found")
+    return await reconcile_company_ads_with_meta(db, company_id)
 
 
 @router.post("/companies/{company_id}/ads/campaigns/{campaign_id}/pause")
