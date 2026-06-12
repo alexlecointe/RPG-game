@@ -242,7 +242,13 @@ class MissionService:
         await self.db.refresh(mission)
         return mission
 
-    async def start_mission(self, company_id: str, mission_type: str) -> Mission:
+    async def start_mission(
+        self,
+        company_id: str,
+        mission_type: str,
+        *,
+        auto_schedule: bool = True,
+    ) -> Mission:
         from app.core.config import get_settings
 
         settings = get_settings()
@@ -297,11 +303,25 @@ class MissionService:
         self.db.add(mission)
         await self.db.flush()
         self.db.add(
-            MissionLog(mission_id=mission.id, step="created", message=f"Mission {mission_type} créée — en attente d'exécution")
+            MissionLog(
+                mission_id=mission.id,
+                step="created",
+                message=f"Mission {mission_type} créée — en attente d'exécution",
+            )
         )
+        if auto_schedule:
+            self.db.add(
+                MissionLog(
+                    mission_id=mission.id,
+                    step="queued",
+                    message="Mission envoyée au worker",
+                )
+            )
         await self.db.commit()
 
-        # Polsia model: mission sits PENDING in queue — user triggers execution manually.
+        if auto_schedule:
+            schedule_mission_run(mission.id)
+
         await self.db.refresh(mission)
         return mission
 

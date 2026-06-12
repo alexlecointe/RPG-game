@@ -355,7 +355,7 @@ class OrchestratorService:
 
             try:
                 mission = await mission_svc.start_mission(
-                    company.id, step.mission_type
+                    company.id, step.mission_type, auto_schedule=False
                 )
                 await chain_svc.mark_step_running(
                     company.id, step.step_number, mission.id

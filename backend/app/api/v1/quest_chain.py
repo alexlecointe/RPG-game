@@ -80,7 +80,9 @@ async def start_quest_step(company_id: str, step_number: int, db: DbSession):
             raise HTTPException(400, "Step already completed")
 
     try:
-        mission = await mission_svc.start_mission(company_id, step.mission_type)
+        mission = await mission_svc.start_mission(
+            company_id, step.mission_type, auto_schedule=False
+        )
     except ValueError as e:
         code = str(e)
         status = 400
