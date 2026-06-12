@@ -300,15 +300,23 @@ def recover_stuck_missions() -> dict:
 async def _recover_stuck_missions_async() -> dict:
     import structlog
     from datetime import datetime, timedelta, timezone
-    from sqlalchemy import select
+    from sqlalchemy import exists, or_, select
 
     from app.core.database import SessionLocal
-    from app.models.entities import Mission, MissionLog, MissionStatus
+    from app.models.entities import Mission, MissionLog, MissionStatus, QuestStep, QuestStepStatus
     from app.workers.runner import schedule_mission_run
 
     logger = structlog.get_logger()
     cutoff = datetime.now(timezone.utc) - timedelta(minutes=2)
     recovered = 0
+    was_dispatched = exists().where(
+        MissionLog.mission_id == Mission.id,
+        MissionLog.step.in_(["queued", "retry_queued", "auto_requeue"]),
+    )
+    has_running_quest_step = exists().where(
+        QuestStep.mission_id == Mission.id,
+        QuestStep.status == QuestStepStatus.RUNNING,
+    )
 
     async with SessionLocal() as db:
         result = await db.execute(
@@ -317,6 +325,7 @@ async def _recover_stuck_missions_async() -> dict:
                 Mission.status == MissionStatus.PENDING,
                 Mission.created_at < cutoff,
                 Mission.completed_at.is_(None),
+                or_(was_dispatched, has_running_quest_step),
             )
             .order_by(Mission.created_at.asc())
             .limit(20)
