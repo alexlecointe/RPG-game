@@ -15,6 +15,7 @@ from app.services.ads import (
     apply_scale_campaign,
     apply_split_winner,
     charge_ads_wallet,
+    cleanup_ads_test_rows,
     get_ads_summary,
     get_wallet_transactions,
     launch_ads_v1,
@@ -267,6 +268,16 @@ async def ads_transactions(company_id: str, db: DbSession, limit: int = 20):
         }
         for t in transactions
     ]
+
+
+@router.post("/companies/{company_id}/ads/cleanup-test-data")
+async def cleanup_ads(company_id: str, db: DbSession):
+    """Keep the current ads launch and remove local rows from previous QA runs."""
+    svc = CompanyService(db)
+    company = await svc.get_company(company_id)
+    if not company:
+        raise HTTPException(404, "Company not found")
+    return await cleanup_ads_test_rows(db, company_id)
 
 
 @router.post("/companies/{company_id}/ads/campaigns/{campaign_id}/pause")

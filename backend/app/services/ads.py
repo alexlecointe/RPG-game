@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import structlog
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.tools.meta_ads_action import (
@@ -1274,19 +1274,27 @@ async def get_ads_summary(db: AsyncSession, company_id: str) -> dict:
     )
     creatives = list(creative_result.scalars().all())
 
+    visible_campaigns = _visible_ads_campaigns(campaigns)
+    visible_campaign_ids = {c.id for c in visible_campaigns}
+    visible_creatives = [
+        creative for creative in creatives
+        if creative.campaign_id in visible_campaign_ids
+    ]
+
     order_result = await db.execute(
         select(Order).where(Order.company_id == company_id)
     )
     orders = list(order_result.scalars().all())
 
     # Aggregate metrics
-    total_spend_cents = sum(c.spend_cents or 0 for c in campaigns)
-    total_impressions = sum(c.impressions or 0 for c in campaigns)
-    total_clicks = sum(c.clicks or 0 for c in campaigns)
-    total_reach = sum(c.reach or 0 for c in campaigns)
-    total_video_views = sum(c.video_views or 0 for c in campaigns)
-    total_video_thruplays = sum(c.video_thruplay_watched or 0 for c in campaigns)
-    active_frequency_values = [c.frequency or 0 for c in campaigns if c.frequency]
+    metric_campaigns = visible_campaigns
+    total_spend_cents = sum(c.spend_cents or 0 for c in metric_campaigns)
+    total_impressions = sum(c.impressions or 0 for c in metric_campaigns)
+    total_clicks = sum(c.clicks or 0 for c in metric_campaigns)
+    total_reach = sum(c.reach or 0 for c in metric_campaigns)
+    total_video_views = sum(c.video_views or 0 for c in metric_campaigns)
+    total_video_thruplays = sum(c.video_thruplay_watched or 0 for c in metric_campaigns)
+    active_frequency_values = [c.frequency or 0 for c in metric_campaigns if c.frequency]
     avg_frequency = (
         sum(active_frequency_values) / len(active_frequency_values)
         if active_frequency_values else 0.0
@@ -1295,7 +1303,7 @@ async def get_ads_summary(db: AsyncSession, company_id: str) -> dict:
     total_purchases = len(orders)
     ctr = (total_clicks / total_impressions * 100) if total_impressions > 0 else 0.0
     cpc_cents = (total_spend_cents // total_clicks) if total_clicks > 0 else 0
-    campaign_roas_values = [c.purchase_roas or 0 for c in campaigns if c.purchase_roas]
+    campaign_roas_values = [c.purchase_roas or 0 for c in metric_campaigns if c.purchase_roas]
     meta_purchase_roas = (
         sum(campaign_roas_values) / len(campaign_roas_values)
         if campaign_roas_values else 0.0
@@ -1307,9 +1315,10 @@ async def get_ads_summary(db: AsyncSession, company_id: str) -> dict:
     spend_rollup_7d = await _compute_spend_rollup_7d(db, company_id)
 
     # Global state determination
-    active_camps = [c for c in campaigns if c.status == AdCampaignStatus.ACTIVE]
-    blocked_camps = [c for c in campaigns if c.status == AdCampaignStatus.BLOCKED]
-    paused_camps = [c for c in campaigns if c.status == AdCampaignStatus.PAUSED]
+    state_campaigns = visible_campaigns
+    active_camps = [c for c in state_campaigns if c.status == AdCampaignStatus.ACTIVE]
+    blocked_camps = [c for c in state_campaigns if c.status == AdCampaignStatus.BLOCKED]
+    paused_camps = [c for c in state_campaigns if c.status == AdCampaignStatus.PAUSED]
 
     wallet = company.ads_wallet_balance_cents or 0
     daily_budget = company.daily_ads_budget_cents or 0
@@ -1328,7 +1337,7 @@ async def get_ads_summary(db: AsyncSession, company_id: str) -> dict:
             if payment_state == "card_expired"
             else "Aucun moyen de paiement valide. Ajoutez une carte pour activer les recharges automatiques."
         )
-    elif not campaigns:
+    elif not state_campaigns:
         state = "no_campaigns"
     elif blocked_camps:
         state = "delivery_blocked"
@@ -1368,7 +1377,7 @@ async def get_ads_summary(db: AsyncSession, company_id: str) -> dict:
             actionable_message = "Vos campagnes sont en pause. Rechargez le wallet ou relancez manuellement."
     else:
         state = "draft"
-        if any(c.name == "Preparing Meta Ads" and not c.meta_campaign_id for c in campaigns):
+        if any(c.name == "Preparing Meta Ads" and not c.meta_campaign_id for c in state_campaigns):
             actionable_message = "Préparation des vidéos et des créas en cours. Le premier lancement peut prendre quelques minutes."
 
     state_message = STATE_MESSAGES.get(state)
@@ -1401,12 +1410,83 @@ async def get_ads_summary(db: AsyncSession, company_id: str) -> dict:
         "ctr": round(ctr, 2),
         "cpc_cents": cpc_cents,
         "spend_rollup_7d": spend_rollup_7d,
-        "campaigns": campaigns,
-        "creatives": creatives,
+        "campaigns": visible_campaigns,
+        "creatives": visible_creatives,
         "owner_actionable": owner_actionable,
         "actionable_message": actionable_message,
         "agent_view": agent_view,
     }
+
+
+async def cleanup_ads_test_rows(db: AsyncSession, company_id: str) -> dict:
+    """Remove old local ads launch attempts and keep the current visible campaign."""
+    result = await db.execute(
+        select(AdCampaign).where(AdCampaign.company_id == company_id)
+    )
+    campaigns = list(result.scalars().all())
+    keep_campaigns = _visible_ads_campaigns(campaigns)
+    keep_ids = {campaign.id for campaign in keep_campaigns}
+    remove_ids = [campaign.id for campaign in campaigns if campaign.id not in keep_ids]
+
+    if not remove_ids:
+        return {
+            "kept_campaign_ids": list(keep_ids),
+            "removed_campaigns": 0,
+            "removed_creatives": 0,
+            "removed_snapshots": 0,
+        }
+
+    creatives_result = await db.execute(
+        select(AdCreative.id).where(AdCreative.campaign_id.in_(remove_ids))
+    )
+    creative_ids = list(creatives_result.scalars().all())
+
+    snapshots_result = await db.execute(
+        select(AdSnapshot.id).where(AdSnapshot.campaign_id.in_(remove_ids))
+    )
+    snapshot_ids = list(snapshots_result.scalars().all())
+
+    await db.execute(delete(AdCreative).where(AdCreative.campaign_id.in_(remove_ids)))
+    await db.execute(delete(AdSnapshot).where(AdSnapshot.campaign_id.in_(remove_ids)))
+    await db.execute(delete(AdCampaign).where(AdCampaign.id.in_(remove_ids)))
+    await db.commit()
+
+    return {
+        "kept_campaign_ids": list(keep_ids),
+        "removed_campaigns": len(remove_ids),
+        "removed_creatives": len(creative_ids),
+        "removed_snapshots": len(snapshot_ids),
+    }
+
+
+def _visible_ads_campaigns(campaigns: list[AdCampaign]) -> list[AdCampaign]:
+    """Keep the dashboard focused on the current delivery attempt."""
+    delivery_statuses = {
+        AdCampaignStatus.ACTIVE,
+        AdCampaignStatus.PAUSED,
+        AdCampaignStatus.BLOCKED,
+    }
+    delivery_campaigns = [
+        campaign for campaign in campaigns
+        if campaign.status in delivery_statuses and campaign.meta_campaign_id
+    ]
+    if delivery_campaigns:
+        return [max(
+            delivery_campaigns,
+            key=lambda campaign: campaign.created_at or datetime.min.replace(tzinfo=timezone.utc),
+        )]
+
+    pending = [
+        campaign for campaign in campaigns
+        if campaign.name == "Preparing Meta Ads" and campaign.status == AdCampaignStatus.DRAFT
+    ]
+    if pending:
+        return [max(
+            pending,
+            key=lambda campaign: campaign.created_at or datetime.min.replace(tzinfo=timezone.utc),
+        )]
+
+    return []
 
 
 async def _compute_spend_rollup_7d(db: AsyncSession, company_id: str) -> list[int]:
