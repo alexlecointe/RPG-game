@@ -13,6 +13,7 @@ from celery import Celery
 from app.core.config import get_settings
 
 settings = get_settings()
+DEFAULT_DATABASE_URL = "sqlite+aiosqlite:///./rpg_agent.db"
 
 celery_app = Celery(
     "rpg_agent",
@@ -76,6 +77,27 @@ def _run_async(coro):
         loop.close()
 
 
+def _validate_worker_runtime() -> None:
+    """Fail loudly when a deployed worker is missing the API environment.
+
+    A worker with only REDIS_URL can still consume Celery jobs, but it falls
+    back to the local SQLite default and exits because it cannot find the
+    mission. Raising here keeps the job retryable and makes the Render logs
+    point at the actual configuration issue.
+    """
+    using_remote_redis = (
+        settings.redis_url
+        and "localhost" not in settings.redis_url
+        and "127.0.0.1" not in settings.redis_url
+    )
+    using_default_db = settings.database_url == DEFAULT_DATABASE_URL
+    if using_remote_redis and using_default_db:
+        raise RuntimeError(
+            "worker_misconfigured: REDIS_URL is set but DATABASE_URL is missing. "
+            "Sync the API env vars to the Celery worker service."
+        )
+
+
 @celery_app.task(
     bind=True,
     name="app.workers.celery_app.run_mission_task",
@@ -89,6 +111,7 @@ def run_mission_task(self, mission_id: str) -> dict:
     """Execute a mission in a Celery worker."""
     from app.workers.runner import _run_mission
 
+    _validate_worker_runtime()
     _run_async(_run_mission(mission_id))
 
     return {"mission_id": mission_id, "status": "completed"}
@@ -105,6 +128,7 @@ def run_mission_task(self, mission_id: str) -> dict:
 )
 def launch_ads_task(self, company_id: str, payload: dict | None = None) -> dict:
     """Launch Meta Ads in the ads queue instead of blocking the API request."""
+    _validate_worker_runtime()
     return _run_async(_launch_ads_async(company_id, payload or {}))
 
 
@@ -150,6 +174,7 @@ async def _launch_ads_async(company_id: str, payload: dict) -> dict:
 @celery_app.task(name="app.workers.celery_app.check_recurring_missions")
 def check_recurring_missions() -> dict:
     """Check for recurring missions due to run and dispatch them."""
+    _validate_worker_runtime()
     return _run_async(_check_recurring_missions_async())
 
 

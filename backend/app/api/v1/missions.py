@@ -137,6 +137,11 @@ async def retry_mission(mission_id: str, db: DbSession):
     mission.status = MS.PENDING
     mission.started_at = None
     mission.error_message = None
+    db.add(MissionLog(
+        mission_id=mission_id,
+        step="retry_queued",
+        message="Mission relancée — en attente du worker",
+    ))
     await db.commit()
     await _release_mission_lock(mission_id)
     schedule_mission_run(mission_id)

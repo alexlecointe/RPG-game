@@ -114,6 +114,7 @@ async def _run_mission_inner(mission_id: str) -> None:
         )
         mission = result.scalar_one_or_none()
         if not mission:
+            logger.error("mission_not_found_for_worker", mission_id=mission_id)
             return
 
         # Debit 1 credit at execution start (Polsia model — never at creation)

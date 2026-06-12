@@ -36,15 +36,15 @@ async def _company_out(company, wallet) -> CompanyOut:
             else:
                 from sqlalchemy import select as _sel
                 from app.models.entities import Mission, MissionStatus as _MS
-                # Check if a landing_page mission is currently running
-                running = await _db.execute(
+                # Check if a landing_page mission is queued or currently running
+                publishing = await _db.execute(
                     _sel(Mission).where(
                         Mission.company_id == company.id,
                         Mission.mission_type == "landing_page",
-                        Mission.status == _MS.RUNNING,
+                        Mission.status.in_([_MS.PENDING, _MS.RUNNING]),
                     ).limit(1)
                 )
-                if running.scalar_one_or_none():
+                if publishing.scalar_one_or_none():
                     site_status = "publishing"
                 else:
                     # Check if last landing_page mission failed

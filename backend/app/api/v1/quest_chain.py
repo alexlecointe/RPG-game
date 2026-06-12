@@ -100,6 +100,12 @@ async def start_quest_step(company_id: str, step_number: int, db: DbSession):
     await chain_svc.mark_step_running(company_id, step_number, mission.id)
 
     # Fire the runner immediately — quest chain steps always execute right away
+    db.add(MissionLog(
+        mission_id=mission.id,
+        step="queued",
+        message="Mission envoyée au worker",
+    ))
+    await db.commit()
     schedule_mission_run(mission.id)
 
     return mission

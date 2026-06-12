@@ -276,6 +276,8 @@ struct GameContainerView: View {
                 // Quest step
                 if !r.isEmpty {
                     panelRunning(r.first?.displayTitle ?? "")
+                } else if let s, s.isRunning {
+                    panelRunning(s.title)
                 } else if let s, s.isAvailable {
                     panelAvailable(s)
                 } else if s?.isLocked == true || (s == nil && done == 0) {
@@ -317,6 +319,8 @@ struct GameContainerView: View {
                 // Quest step
                 if !r.isEmpty {
                     panelRunning(r.first?.displayTitle ?? "")
+                } else if let s, s.isRunning {
+                    panelRunning(s.title)
                 } else if let s, s.isAvailable {
                     panelAvailable(s)
                 } else if s?.isLocked == true || (s == nil && done == 0) {
@@ -359,6 +363,8 @@ struct GameContainerView: View {
                 }
                 if !r.isEmpty {
                     panelRunning(r.first?.displayTitle ?? "")
+                } else if let s, s.isRunning {
+                    panelRunning(s.title)
                 } else if let s, s.isAvailable {
                     panelAvailable(s)
                 } else if s?.isLocked == true || (s == nil && done == 0) {
@@ -390,6 +396,8 @@ struct GameContainerView: View {
                     .font(mono(8)).foregroundStyle(.white.opacity(0.4))
                 if !r.isEmpty {
                     panelRunning(r.first?.displayTitle ?? "")
+                } else if let s, s.isRunning {
+                    panelRunning(s.title)
                 } else if let s, s.isAvailable {
                     panelAvailable(s)
                 } else if s?.isLocked == true || (s == nil && done == 0) {
