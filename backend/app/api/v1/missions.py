@@ -4,7 +4,7 @@ import asyncio
 import json
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -121,21 +121,26 @@ async def get_mission(mission_id: str, db: DbSession):
 
 
 @router.post("/missions/{mission_id}/retry")
-async def retry_mission(mission_id: str, db: DbSession):
+async def retry_mission(mission_id: str, background_tasks: BackgroundTasks, db: DbSession, force: bool = False):
     """Re-fire the runner for a mission stuck in pending/running."""
-    from app.workers.runner import _release_mission_lock, schedule_mission_run
+    from app.workers.runner import _release_mission_lock, _run_mission, schedule_mission_run
     from app.models.entities import MissionStatus as MS
 
     svc = MissionService(db)
     mission = await svc.get_mission(mission_id)
     if not mission:
         raise HTTPException(404, "Mission not found")
-    if mission.status == MS.COMPLETED:
+    if mission.status == MS.COMPLETED and not force:
         raise HTTPException(400, "Mission already completed")
 
     # Reset to pending so the runner starts fresh
     mission.status = MS.PENDING
     mission.started_at = None
+    mission.completed_at = None
+    mission.deliverable = None
+    mission.deliverable_format = None
+    mission.quality_score = None
+    mission.quality_feedback = None
     mission.error_message = None
     db.add(MissionLog(
         mission_id=mission_id,
@@ -145,6 +150,7 @@ async def retry_mission(mission_id: str, db: DbSession):
     await db.commit()
     await _release_mission_lock(mission_id)
     schedule_mission_run(mission_id)
+    background_tasks.add_task(_run_mission, mission_id)
     return {"ok": True, "mission_id": mission_id, "status": "retrying"}
 
 
