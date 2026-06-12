@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select
 
 from app.api.deps import DbSession, verify_api_key
@@ -94,7 +94,7 @@ async def _company_out(company, wallet) -> CompanyOut:
 
 
 @router.post("/{user_id}", response_model=CompanyOut)
-async def create_company(user_id: str, body: CompanyCreate, db: DbSession):
+async def create_company(user_id: str, body: CompanyCreate, background_tasks: BackgroundTasks, db: DbSession):
     svc = CompanyService(db)
     company = await svc.create_company(user_id, body)
     await db.commit()
@@ -108,13 +108,14 @@ async def create_company(user_id: str, body: CompanyCreate, db: DbSession):
     chain_svc = QuestChainService(db)
     await chain_svc.initialize_chain(company.id, company.business_type)
 
-    await _launch_auto_missions(db, company)
+    await _launch_auto_missions(db, company, background_tasks)
 
     return await _company_out(company, company.wallet)
 
 
-async def _launch_auto_missions(db, company):
+async def _launch_auto_missions(db, company, background_tasks: BackgroundTasks):
     from app.services.quest_chain import QuestChainService
+    from app.workers.runner import _run_mission
 
     chain_svc = QuestChainService(db)
     step1 = await chain_svc.get_step(company.id, 1)
@@ -152,6 +153,7 @@ async def _launch_auto_missions(db, company):
     )
     for mission in result.scalars().all():
         schedule_mission_run(mission.id)
+        background_tasks.add_task(_run_mission, mission.id)
 
 
 @router.get("/{company_id}", response_model=CompanyOut)
