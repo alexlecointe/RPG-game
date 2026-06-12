@@ -287,6 +287,51 @@ async def charge_ads_wallet(db: AsyncSession, company: Company) -> int:
     return spendable
 
 
+async def ensure_ads_wallet_funded(
+    db: AsyncSession,
+    company: Company,
+    *,
+    allow_manual_fallback: bool = True,
+) -> dict:
+    """Top up the ads wallet before launch/cycle if the spendable balance is empty."""
+    if not company.daily_ads_budget_cents or company.daily_ads_budget_cents <= 0:
+        return {"skipped": True, "reason": "no_daily_budget"}
+
+    if (company.ads_wallet_balance_cents or 0) > 0:
+        return {
+            "skipped": True,
+            "reason": "wallet_already_funded",
+            "balance_cents": company.ads_wallet_balance_cents or 0,
+        }
+
+    try:
+        from app.services.billing import charge_ads_wallet_stripe
+
+        result = await charge_ads_wallet_stripe(db, company)
+    except Exception as exc:
+        logger.warning("ads_wallet_stripe_topup_failed", company_id=company.id, error=str(exc))
+        result = {"skipped": True, "reason": "stripe_error", "message": str(exc)}
+
+    if not result.get("skipped"):
+        await db.refresh(company)
+        result["balance_cents"] = company.ads_wallet_balance_cents or 0
+        return result
+
+    reason = result.get("reason")
+    if allow_manual_fallback and reason == "no_stripe_configured":
+        added = await charge_ads_wallet(db, company)
+        await db.refresh(company)
+        return {
+            "charged_cents": 0,
+            "spendable_cents": added,
+            "balance_cents": company.ads_wallet_balance_cents or 0,
+            "manual_fallback": True,
+            "reason": "no_stripe_configured",
+        }
+
+    return result
+
+
 async def launch_meta_campaign(
     db: AsyncSession,
     company: Company,
@@ -501,6 +546,14 @@ async def launch_ads_v1(
     budget = daily_budget_cents or company.daily_ads_budget_cents or 0
     if budget <= 0:
         raise ValueError("ads_budget_required")
+
+    funding = await ensure_ads_wallet_funded(db, company)
+    if funding.get("skipped") and funding.get("reason") in {
+        "card_expired",
+        "payment_method_missing",
+        "stripe_error",
+    }:
+        raise ValueError(f"ads_wallet_topup_failed: {funding.get('reason')}")
 
     variants = _default_ad_variants(company)
     resolved_headlines = [
@@ -1225,8 +1278,7 @@ async def run_ads_daily_cycle(
 
     if charge_wallet and active_campaigns and not company.ads_winding_down:
         try:
-            from app.services.billing import charge_ads_wallet_stripe
-            charge_result = await charge_ads_wallet_stripe(db, company)
+            charge_result = await ensure_ads_wallet_funded(db, company)
         except Exception as exc:
             charge_result = {"skipped": True, "reason": "charge_error", "message": str(exc)}
             logger.warning("ads_daily_cycle_charge_failed", company_id=company_id, error=str(exc))

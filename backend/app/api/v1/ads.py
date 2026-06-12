@@ -16,6 +16,7 @@ from app.services.ads import (
     apply_split_winner,
     charge_ads_wallet,
     cleanup_ads_test_rows,
+    ensure_ads_wallet_funded,
     get_ads_summary,
     get_wallet_transactions,
     launch_ads_v1,
@@ -120,8 +121,15 @@ async def charge_wallet(company_id: str, db: DbSession):
     company = await svc.get_company(company_id)
     if not company:
         raise HTTPException(404, "Company not found")
-    added = await charge_ads_wallet(db, company)
-    return {"added_cents": added, "balance_cents": company.ads_wallet_balance_cents}
+    result = await ensure_ads_wallet_funded(db, company)
+    if result.get("skipped") and result.get("reason") == "wallet_already_funded":
+        return result
+    if result.get("skipped") and result.get("reason") in {"card_expired", "payment_method_missing", "stripe_error"}:
+        raise HTTPException(402, result)
+    if result.get("skipped"):
+        added = await charge_ads_wallet(db, company)
+        return {"added_cents": added, "balance_cents": company.ads_wallet_balance_cents, "manual_fallback": True}
+    return result
 
 
 @router.post("/companies/{company_id}/ads/daily-cycle")
