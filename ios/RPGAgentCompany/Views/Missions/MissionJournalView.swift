@@ -167,12 +167,7 @@ struct MissionJournalView: View {
 
     @ViewBuilder
     private func agentStatusIcon(_ entry: ActivityFeedEntry) -> some View {
-        if entry.missionStatus == "running" || entry.step == "agent_started" {
-            ProgressView()
-                .scaleEffect(0.6)
-                .tint(agentColor(entry.agentType))
-                .frame(width: 16, height: 16)
-        } else if entry.missionStatus == "completed" || entry.step == "completed" {
+        if entry.missionStatus == "completed" || entry.step == "completed" {
             Text("✓")
                 .font(PixelTheme.captionFont)
                 .foregroundStyle(PixelTheme.accentGreen)
@@ -182,6 +177,11 @@ struct MissionJournalView: View {
                 .font(PixelTheme.captionFont)
                 .foregroundStyle(PixelTheme.accentRed)
                 .frame(width: 16)
+        } else if entry.missionStatus == "running" || entry.step == "agent_started" {
+            ProgressView()
+                .scaleEffect(0.6)
+                .tint(agentColor(entry.agentType))
+                .frame(width: 16, height: 16)
         } else {
             Text("▸")
                 .font(PixelTheme.captionFont)
