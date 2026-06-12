@@ -104,28 +104,35 @@ async def get_live_artifact(db: AsyncSession, slug: str) -> "SiteArtifact | None
 
 async def prepare_site_html_for_checkout(db: AsyncSession, artifact: "SiteArtifact") -> str:  # type: ignore[name-defined]
     """Attach the latest Stripe Payment Link to purchase CTAs on hosted sites."""
+    fallback_html = artifact.html_content
+    company_id = artifact.company_id
+    slug = artifact.slug
     try:
         payment_url = await _get_or_create_site_payment_link(db, artifact)
     except Exception as exc:
         await db.rollback()
         logger.exception(
             "site_checkout_prepare_failed",
-            company_id=artifact.company_id,
-            slug=artifact.slug,
+            company_id=company_id,
+            slug=slug,
             error=str(exc),
         )
-        return artifact.html_content
+        return fallback_html
     if not payment_url:
-        return artifact.html_content
-    return _inject_checkout_url(artifact.html_content, payment_url)
+        return fallback_html
+    return _inject_checkout_url(fallback_html, payment_url)
 
 
 async def _get_or_create_site_payment_link(db: AsyncSession, artifact: "SiteArtifact") -> str:  # type: ignore[name-defined]
     from app.models.entities import BusinessType, Company, PaymentLink
 
+    artifact_company_id = artifact.company_id
+    artifact_slug = artifact.slug
+    artifact_html = artifact.html_content
+
     link_result = await db.execute(
         select(PaymentLink)
-        .where(PaymentLink.company_id == artifact.company_id, PaymentLink.active == True)  # noqa: E712
+        .where(PaymentLink.company_id == artifact_company_id, PaymentLink.active == True)  # noqa: E712
         .order_by(PaymentLink.created_at.desc())
         .limit(1)
     )
@@ -134,27 +141,32 @@ async def _get_or_create_site_payment_link(db: AsyncSession, artifact: "SiteArti
         return existing_link.url
 
     company_result = await db.execute(
-        select(Company).where(Company.id == artifact.company_id).limit(1)
+        select(Company).where(Company.id == artifact_company_id).limit(1)
     )
     company = company_result.scalar_one_or_none()
     if not company:
         return ""
 
-    amount_cents = _extract_price_cents(artifact.html_content)
+    amount_cents = _extract_price_cents(artifact_html)
+    company_id = company.id
+    company_slug = company.slug or artifact_slug
+    company_name = company.name
+    product_description = company.product_description
+    business_type = company.business_type
     if not amount_cents:
         logger.warning(
             "site_checkout_price_missing",
-            company_id=company.id,
-            slug=artifact.slug,
+            company_id=company_id,
+            slug=artifact_slug,
         )
         return ""
 
-    if company.business_type != BusinessType.ECOMMERCE:
+    if business_type != BusinessType.ECOMMERCE:
         logger.info(
             "site_checkout_price_detected_for_non_ecommerce",
-            company_id=company.id,
-            slug=artifact.slug,
-            business_type=getattr(company.business_type, "value", str(company.business_type)),
+            company_id=company_id,
+            slug=artifact_slug,
+            business_type=getattr(business_type, "value", str(business_type)),
         )
 
     settings = get_settings()
@@ -172,13 +184,13 @@ async def _get_or_create_site_payment_link(db: AsyncSession, artifact: "SiteArti
         except Exception as exc:
             logger.warning(
                 "site_checkout_connect_status_failed",
-                company_id=company.id,
+                company_id=company_id,
                 error=str(exc),
             )
             connect_account_id = ""
 
-    product_name = _site_product_name(company.name, company.product_description)
-    success_url = build_gateway_url(artifact.slug) or settings.backend_public_url or "https://example.com/merci"
+    product_name = _site_product_name(company_name, product_description)
+    success_url = build_gateway_url(artifact_slug) or settings.backend_public_url or "https://example.com/merci"
 
     result = await _try_create_site_payment_link(
         secret_key=settings.stripe_secret_key,
@@ -186,16 +198,16 @@ async def _get_or_create_site_payment_link(db: AsyncSession, artifact: "SiteArti
         amount_cents=amount_cents,
         currency="eur",
         success_url=success_url,
-        company_slug=company.slug or artifact.slug,
-        company_id=company.id,
-        slug=artifact.slug,
+        company_slug=company_slug,
+        company_id=company_id,
+        slug=artifact_slug,
         connect_account_id=connect_account_id,
     )
     if not result and connect_account_id:
         logger.warning(
             "site_checkout_connect_fallback_to_platform",
-            company_id=company.id,
-            slug=artifact.slug,
+            company_id=company_id,
+            slug=artifact_slug,
         )
         result = await _try_create_site_payment_link(
             secret_key=settings.stripe_secret_key,
@@ -203,9 +215,9 @@ async def _get_or_create_site_payment_link(db: AsyncSession, artifact: "SiteArti
             amount_cents=amount_cents,
             currency="eur",
             success_url=success_url,
-            company_slug=company.slug or artifact.slug,
-            company_id=company.id,
-            slug=artifact.slug,
+            company_slug=company_slug,
+            company_id=company_id,
+            slug=artifact_slug,
             connect_account_id="",
         )
 
@@ -216,7 +228,7 @@ async def _get_or_create_site_payment_link(db: AsyncSession, artifact: "SiteArti
 
     try:
         db.add(PaymentLink(
-            company_id=company.id,
+            company_id=company_id,
             stripe_payment_link_id=payment_link_id,
             url=payment_url,
             product_name=product_name,
@@ -232,11 +244,11 @@ async def _get_or_create_site_payment_link(db: AsyncSession, artifact: "SiteArti
         await db.rollback()
         logger.warning(
             "site_checkout_payment_link_persist_failed",
-            company_id=company.id,
-            slug=artifact.slug,
+            company_id=company_id,
+            slug=artifact_slug,
             error=str(exc),
         )
-    logger.info("site_checkout_payment_link_created", company_id=company.id, slug=artifact.slug, url=payment_url)
+    logger.info("site_checkout_payment_link_created", company_id=company_id, slug=artifact_slug, url=payment_url)
     return payment_url
 
 
