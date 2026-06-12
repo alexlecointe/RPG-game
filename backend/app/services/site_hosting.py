@@ -127,12 +127,20 @@ async def _get_or_create_site_payment_link(db: AsyncSession, artifact: "SiteArti
         select(Company).where(Company.id == artifact.company_id).limit(1)
     )
     company = company_result.scalar_one_or_none()
-    if not company or company.business_type != BusinessType.ECOMMERCE:
+    if not company:
         return ""
 
     amount_cents = _extract_price_cents(artifact.html_content)
     if not amount_cents:
         return ""
+
+    if company.business_type != BusinessType.ECOMMERCE:
+        logger.info(
+            "site_checkout_price_detected_for_non_ecommerce",
+            company_id=company.id,
+            slug=artifact.slug,
+            business_type=getattr(company.business_type, "value", str(company.business_type)),
+        )
 
     settings = get_settings()
     if not settings.stripe_secret_key:
@@ -217,7 +225,11 @@ def _inject_checkout_url(html: str, payment_url: str) -> str:
     url_json = json.dumps(payment_url)
     updated = re.sub(r"https://buy\.stripe\.com/PLACEHOLDER", payment_url, html, flags=re.IGNORECASE)
 
-    cta_words = r"(?:commander|acheter|pré[- ]?commander|pre[- ]?order|order|buy|checkout)"
+    cta_words = (
+        r"(?:commander|commander\s+maintenant|acheter|acheter\s+maintenant|"
+        r"pré[- ]?commander|pre[- ]?order|order|order\s+now|buy|buy\s+now|"
+        r"checkout|panier|cart|shop)"
+    )
 
     def _rewrite_anchor(match: re.Match[str]) -> str:
         attrs, body = match.group(1), match.group(2)
@@ -226,13 +238,15 @@ def _inject_checkout_url(html: str, payment_url: str) -> str:
             return match.group(0)
         if re.search(r"\bhref\s*=", attrs, flags=re.IGNORECASE):
             attrs = re.sub(
-                r"\bhref\s*=\s*(['\"])(?:#|/checkout|javascript:void\(0\)|)\1",
+                r"\bhref\s*=\s*(['\"])(.*?)\1",
                 f'href="{payment_url}"',
                 attrs,
-                flags=re.IGNORECASE,
+                flags=re.IGNORECASE | re.DOTALL,
             )
         else:
             attrs = f'{attrs} href="{payment_url}"'
+        if not re.search(r"\bdata-rpg-checkout\s*=", attrs, flags=re.IGNORECASE):
+            attrs = f'{attrs} data-rpg-checkout="true"'
         return f"<a{attrs}>{body}</a>"
 
     updated = re.sub(r"<a\b([^>]*)>(.*?)</a>", _rewrite_anchor, updated, flags=re.IGNORECASE | re.DOTALL)
@@ -241,12 +255,14 @@ def _inject_checkout_url(html: str, payment_url: str) -> str:
 <script>
 (function () {{
   var checkoutUrl = {url_json};
-  var words = /commander|acheter|pré[- ]?commander|pre[- ]?order|order|buy|checkout/i;
+  var words = /commander|commander\\s+maintenant|acheter|acheter\\s+maintenant|pré[- ]?commander|pre[- ]?order|order|order\\s+now|buy|buy\\s+now|checkout|panier|cart|shop/i;
   document.addEventListener('click', function (event) {{
     var target = event.target && event.target.closest ? event.target.closest('a,button,[role="button"]') : null;
-    if (!target || !words.test((target.textContent || '').trim())) return;
+    if (!target) return;
+    var isCheckoutCta = target.getAttribute('data-rpg-checkout') === 'true' || words.test((target.textContent || '').trim());
+    if (!isCheckoutCta) return;
     var href = target.getAttribute('href') || '';
-    if (target.tagName === 'BUTTON' || !href || href === '#' || href.indexOf('javascript:') === 0 || href === '/checkout') {{
+    if (target.tagName === 'BUTTON' || !href || href === '#' || href.indexOf('javascript:') === 0 || href.charAt(0) === '/' || target.getAttribute('data-rpg-checkout') === 'true') {{
       event.preventDefault();
       window.location.href = checkoutUrl;
     }}
