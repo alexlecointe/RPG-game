@@ -374,6 +374,8 @@ async def execute_agent(
 
     providers = _ordered_providers(resolved_provider)
 
+    provider_errors: list[str] = []
+
     for provider in providers:
         try:
             model = resolved_model if provider == resolved_provider else (
@@ -397,10 +399,17 @@ async def execute_agent(
             return result
 
         except Exception as exc:
+            provider_errors.append(f"{provider}: {str(exc)[:240]}")
             logger.warning("provider_failed", provider=provider, error=str(exc))
             if log_callback:
                 await log_callback("fallback", f"{provider} echoue, tentative suivante...")
             continue
+
+    if settings.app_env != "development":
+        detail = "; ".join(provider_errors) if provider_errors else "no_provider_configured"
+        if log_callback:
+            await log_callback("provider_failed", f"Aucun provider IA disponible : {detail[:300]}")
+        raise RuntimeError(f"ai_provider_unavailable: {detail}")
 
     logger.info("all_providers_failed_falling_back_to_mock", mission_type=mission_type)
     if log_callback:
