@@ -104,7 +104,17 @@ async def get_live_artifact(db: AsyncSession, slug: str) -> "SiteArtifact | None
 
 async def prepare_site_html_for_checkout(db: AsyncSession, artifact: "SiteArtifact") -> str:  # type: ignore[name-defined]
     """Attach the latest Stripe Payment Link to purchase CTAs on hosted sites."""
-    payment_url = await _get_or_create_site_payment_link(db, artifact)
+    try:
+        payment_url = await _get_or_create_site_payment_link(db, artifact)
+    except Exception as exc:
+        await db.rollback()
+        logger.exception(
+            "site_checkout_prepare_failed",
+            company_id=artifact.company_id,
+            slug=artifact.slug,
+            error=str(exc),
+        )
+        return artifact.html_content
     if not payment_url:
         return artifact.html_content
     return _inject_checkout_url(artifact.html_content, payment_url)
@@ -167,36 +177,102 @@ async def _get_or_create_site_payment_link(db: AsyncSession, artifact: "SiteArti
             )
             connect_account_id = ""
 
-    from app.agents.tools.stripe_action import _create_payment_link
+    product_name = _site_product_name(company.name, company.product_description)
+    success_url = build_gateway_url(artifact.slug) or settings.backend_public_url or "https://example.com/merci"
 
-    result = await _create_payment_link(
+    result = await _try_create_site_payment_link(
         secret_key=settings.stripe_secret_key,
-        product_name=_site_product_name(company.name, company.product_description),
+        product_name=product_name,
         amount_cents=amount_cents,
         currency="eur",
-        success_url=build_gateway_url(artifact.slug) or settings.backend_public_url or "https://example.com/merci",
+        success_url=success_url,
         company_slug=company.slug or artifact.slug,
+        company_id=company.id,
+        slug=artifact.slug,
         connect_account_id=connect_account_id,
     )
+    if not result and connect_account_id:
+        logger.warning(
+            "site_checkout_connect_fallback_to_platform",
+            company_id=company.id,
+            slug=artifact.slug,
+        )
+        result = await _try_create_site_payment_link(
+            secret_key=settings.stripe_secret_key,
+            product_name=product_name,
+            amount_cents=amount_cents,
+            currency="eur",
+            success_url=success_url,
+            company_slug=company.slug or artifact.slug,
+            company_id=company.id,
+            slug=artifact.slug,
+            connect_account_id="",
+        )
+
     payment_url = result.get("payment_link_url") or result.get("url") or ""
-    if not payment_url:
+    payment_link_id = result.get("payment_link_id")
+    if not payment_url or not payment_link_id:
         return ""
 
-    db.add(PaymentLink(
-        company_id=company.id,
-        stripe_payment_link_id=result["payment_link_id"],
-        url=payment_url,
-        product_name=_site_product_name(company.name, company.product_description),
-        amount_cents=amount_cents,
-        currency="eur",
-        stripe_product_id=result.get("product_id"),
-        stripe_price_id=result.get("price_id"),
-        payout_status=result.get("payout_status", "connected" if connect_account_id else "platform_pending_connect"),
-        requires_connect=bool(result.get("requires_connect", not bool(connect_account_id))),
-    ))
-    await db.commit()
+    try:
+        db.add(PaymentLink(
+            company_id=company.id,
+            stripe_payment_link_id=payment_link_id,
+            url=payment_url,
+            product_name=product_name,
+            amount_cents=amount_cents,
+            currency="eur",
+            stripe_product_id=result.get("product_id"),
+            stripe_price_id=result.get("price_id"),
+            payout_status=result.get("payout_status", "connected" if connect_account_id else "platform_pending_connect"),
+            requires_connect=bool(result.get("requires_connect", not bool(connect_account_id))),
+        ))
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        logger.warning(
+            "site_checkout_payment_link_persist_failed",
+            company_id=company.id,
+            slug=artifact.slug,
+            error=str(exc),
+        )
     logger.info("site_checkout_payment_link_created", company_id=company.id, slug=artifact.slug, url=payment_url)
     return payment_url
+
+
+async def _try_create_site_payment_link(
+    *,
+    secret_key: str,
+    product_name: str,
+    amount_cents: int,
+    currency: str,
+    success_url: str,
+    company_slug: str,
+    company_id: str,
+    slug: str,
+    connect_account_id: str,
+) -> dict:
+    from app.agents.tools.stripe_action import _create_payment_link
+
+    try:
+        return await _create_payment_link(
+            secret_key=secret_key,
+            product_name=product_name,
+            amount_cents=amount_cents,
+            currency=currency,
+            success_url=success_url,
+            company_slug=company_slug,
+            connect_account_id=connect_account_id,
+        )
+    except Exception as exc:
+        logger.warning(
+            "site_checkout_payment_link_create_failed",
+            company_id=company_id,
+            slug=slug,
+            connect=bool(connect_account_id),
+            error=str(exc),
+        )
+        return {}
 
 
 def _site_product_name(company_name: str, product_description: str | None) -> str:
@@ -246,6 +322,11 @@ def _extract_price_cents(html: str) -> int | None:
 def _inject_checkout_url(html: str, payment_url: str) -> str:
     url_json = json.dumps(payment_url)
     updated = re.sub(r"https://buy\.stripe\.com/PLACEHOLDER", payment_url, html, flags=re.IGNORECASE)
+    for placeholder_pattern in (
+        r"https://example\.com/(?:checkout|buy|order|preorder|pre-order)",
+        r"https://www\.example\.com/(?:checkout|buy|order|preorder|pre-order)",
+    ):
+        updated = re.sub(placeholder_pattern, payment_url, updated, flags=re.IGNORECASE)
 
     cta_words = (
         r"(?:commander|commander\s+maintenant|acheter|acheter\s+maintenant|"
@@ -288,7 +369,7 @@ def _inject_checkout_url(html: str, payment_url: str) -> str:
       event.preventDefault();
       window.location.href = checkoutUrl;
     }}
-  }});
+  }}, true);
 }})();
 </script>"""
     if "rpgagent-checkout-injected" in updated:
