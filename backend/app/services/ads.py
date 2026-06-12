@@ -1310,6 +1310,78 @@ async def run_ads_daily_cycle(
     }
 
 
+async def _reconcile_meta_campaign_objects(
+    db: AsyncSession,
+    campaign: AdCampaign,
+    creatives: list[AdCreative],
+) -> None:
+    """Fill local Meta ids when a launch created objects but did not persist every id."""
+    if not campaign.meta_campaign_id:
+        return
+
+    needs_adset = not campaign.meta_ad_set_id
+    needs_ads = any(not creative.meta_ad_id or not creative.meta_creative_id for creative in creatives)
+    if not needs_adset and not needs_ads:
+        return
+
+    settings = get_settings()
+    token = settings.meta_capi_token
+    if not token:
+        return
+
+    changed = False
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            if needs_adset:
+                resp = await client.get(
+                    f"{META_GRAPH}/{campaign.meta_campaign_id}/adsets",
+                    params={
+                        "access_token": token,
+                        "fields": "id,name,status,effective_status",
+                        "limit": "10",
+                    },
+                )
+                resp.raise_for_status()
+                adsets = resp.json().get("data") or []
+                if adsets:
+                    campaign.meta_ad_set_id = adsets[0].get("id")
+                    changed = True
+
+            if campaign.meta_ad_set_id and needs_ads:
+                resp = await client.get(
+                    f"{META_GRAPH}/{campaign.meta_ad_set_id}/ads",
+                    params={
+                        "access_token": token,
+                        "fields": "id,name,status,effective_status,creative{id,name}",
+                        "limit": "50",
+                    },
+                )
+                resp.raise_for_status()
+                ads = resp.json().get("data") or []
+                ads_by_name = {str(ad.get("name") or ""): ad for ad in ads}
+                for creative in creatives:
+                    ad = ads_by_name.get(creative.title)
+                    if not ad:
+                        continue
+                    creative.meta_ad_id = creative.meta_ad_id or ad.get("id")
+                    meta_creative = ad.get("creative") or {}
+                    creative.meta_creative_id = creative.meta_creative_id or meta_creative.get("id")
+                    meta_status = str(ad.get("status") or "").lower()
+                    if meta_status:
+                        creative.status = meta_status
+                    changed = True
+
+        if changed:
+            await db.commit()
+    except Exception as exc:
+        logger.warning(
+            "meta_campaign_reconcile_failed",
+            campaign_id=campaign.id,
+            meta_campaign_id=campaign.meta_campaign_id,
+            error=str(exc),
+        )
+
+
 async def get_ads_summary(db: AsyncSession, company_id: str) -> dict:
     """Return Polsia-like ads summary: global state + aggregated metrics + wallet."""
     company = await db.get(Company, company_id)
@@ -1332,6 +1404,12 @@ async def get_ads_summary(db: AsyncSession, company_id: str) -> dict:
         creative for creative in creatives
         if creative.campaign_id in visible_campaign_ids
     ]
+    for campaign in visible_campaigns:
+        await _reconcile_meta_campaign_objects(
+            db,
+            campaign,
+            [creative for creative in visible_creatives if creative.campaign_id == campaign.id],
+        )
 
     order_result = await db.execute(
         select(Order).where(Order.company_id == company_id)
