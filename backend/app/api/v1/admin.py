@@ -84,6 +84,65 @@ async def admin_deploy_landing(company_id: str, db: DbSession):
     return {"deployed": True, "platform": "gateway", "slug": slug, "site_url": site_url, "version": artifact.version}
 
 
+@router.post("/repair/market-scan")
+async def admin_repair_market_scan(
+    company_id: Optional[str] = None,
+    limit: int = 20,
+    db: DbSession = None,
+):
+    """Synchronously complete stuck onboarding market scans.
+
+    This is intentionally independent from Celery so a broken or backed-up worker
+    cannot block the first quest.
+    """
+    from app.agents.researcher import ResearcherAgent
+    from app.models.entities import MissionLog
+    from app.services.mission import MissionService
+
+    filters = [
+        Mission.mission_type == "market_scan",
+        Mission.status.in_([MissionStatus.PENDING, MissionStatus.RUNNING]),
+    ]
+    if company_id:
+        filters.append(Mission.company_id == company_id)
+
+    result = await db.execute(
+        select(Mission)
+        .where(*filters)
+        .order_by(Mission.created_at.desc())
+        .limit(limit)
+    )
+    missions = list(result.scalars().all())
+    mission_svc = MissionService(db)
+    repaired: list[dict] = []
+
+    for mission in missions:
+        company = await db.get(Company, mission.company_id)
+        if not company:
+            continue
+
+        db.add(MissionLog(
+            mission_id=mission.id,
+            step="admin_repair",
+            message="Market scan reparee synchroniquement",
+        ))
+        agent_result = await ResearcherAgent().run(
+            mission.mission_type,
+            company.name,
+            company.mission_statement,
+        )
+        mission.quality_score = 10
+        mission.quality_feedback = "Admin repair market scan"
+        await mission_svc.complete_mission(mission, agent_result.format, agent_result.content)
+        repaired.append({
+            "mission_id": mission.id,
+            "company_id": mission.company_id,
+            "company_name": company.name,
+        })
+
+    return {"repaired": len(repaired), "missions": repaired}
+
+
 @router.get("/overview", response_model=AdminOverview)
 async def admin_overview(days: int = 30, db: DbSession = None):
     since = datetime.now(timezone.utc) - timedelta(days=days)
