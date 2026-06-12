@@ -132,6 +132,11 @@ async def _get_or_create_site_payment_link(db: AsyncSession, artifact: "SiteArti
 
     amount_cents = _extract_price_cents(artifact.html_content)
     if not amount_cents:
+        logger.warning(
+            "site_checkout_price_missing",
+            company_id=company.id,
+            slug=artifact.slug,
+        )
         return ""
 
     if company.business_type != BusinessType.ECOMMERCE:
@@ -204,6 +209,15 @@ def _site_product_name(company_name: str, product_description: str | None) -> st
 
 
 def _extract_price_cents(html: str) -> int | None:
+    def _to_cents(value: str) -> int | None:
+        try:
+            cents = int(round(float(value.replace(",", ".")) * 100))
+        except ValueError:
+            return None
+        if 50 <= cents <= 500_000:
+            return cents
+        return None
+
     text = re.sub(r"<[^>]+>", " ", html)
     patterns = [
         r"(?:€|EUR)\s*([0-9]+(?:[,.][0-9]{1,2})?)",
@@ -211,12 +225,20 @@ def _extract_price_cents(html: str) -> int | None:
     ]
     for pattern in patterns:
         for match in re.finditer(pattern, text, flags=re.IGNORECASE):
-            value = match.group(1).replace(",", ".")
-            try:
-                cents = int(round(float(value) * 100))
-            except ValueError:
-                continue
-            if 50 <= cents <= 500_000:
+            cents = _to_cents(match.group(1))
+            if cents:
+                return cents
+
+    tracking_patterns = [
+        r"\bvalue\s*:\s*([0-9]+(?:[,.][0-9]{1,2})?)\s*,\s*currency\s*:\s*['\"]EUR['\"]",
+        r"\bcurrency\s*:\s*['\"]EUR['\"]\s*,\s*\bvalue\s*:\s*([0-9]+(?:[,.][0-9]{1,2})?)",
+        r"['\"]value['\"]\s*:\s*([0-9]+(?:[,.][0-9]{1,2})?)\s*,\s*['\"]currency['\"]\s*:\s*['\"]EUR['\"]",
+        r"['\"]currency['\"]\s*:\s*['\"]EUR['\"]\s*,\s*['\"]value['\"]\s*:\s*([0-9]+(?:[,.][0-9]{1,2})?)",
+    ]
+    for pattern in tracking_patterns:
+        for match in re.finditer(pattern, html, flags=re.IGNORECASE):
+            cents = _to_cents(match.group(1))
+            if cents:
                 return cents
     return None
 

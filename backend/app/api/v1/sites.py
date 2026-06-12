@@ -5,22 +5,23 @@ GET  /sites/{slug}/status   → JSON status (for iOS polling)
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi import APIRouter, Depends
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from app.api.deps import DbSession
 from app.services.site_hosting import build_gateway_url, get_live_artifact, prepare_site_html_for_checkout
 
 router = APIRouter()
 
-# Sites are regenerated rarely; cache for 5 minutes in browsers / CDN.
-_SITE_CACHE_MAX_AGE = 300
+# Checkout links can be created lazily while serving the site, so do not let
+# browsers keep an old CTA that still points to a placeholder checkout URL.
+_SITE_CACHE_CONTROL = "no-store"
 # Status endpoint is polled during generation; cache briefly only.
 _STATUS_CACHE_MAX_AGE = 10
 
 
 @router.get("/sites/{slug}", response_class=HTMLResponse, include_in_schema=False)
-async def serve_site(slug: str, db: DbSession, request: Request):
+async def serve_site(slug: str, db: DbSession):
     """Serve the live landing page for the given company slug."""
     artifact = await get_live_artifact(db, slug)
     if not artifact:
@@ -31,16 +32,13 @@ async def serve_site(slug: str, db: DbSession, request: Request):
         )
 
     etag = f'"{artifact.id}-v{artifact.version}"'
-    if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304)
-
     html_content = await prepare_site_html_for_checkout(db, artifact)
 
     return HTMLResponse(
         content=html_content,
         status_code=200,
         headers={
-            "Cache-Control": f"public, max-age={_SITE_CACHE_MAX_AGE}, stale-while-revalidate=60",
+            "Cache-Control": _SITE_CACHE_CONTROL,
             "ETag": etag,
             "X-Site-Version": str(artifact.version),
         },
