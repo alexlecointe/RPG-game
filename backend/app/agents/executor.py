@@ -134,7 +134,14 @@ def _load_skill_versioned(
     generic = SKILLS_DIR / f"{mission_type}.md"
     if generic.exists():
         raw = generic.read_text(encoding="utf-8").strip()
-        return _parse_skill_header(raw)
+        content, version = _parse_skill_header(raw)
+        if mission_type == "landing_page_revision":
+            base = SKILLS_DIR / "landing_page.md"
+            if base.exists():
+                base_raw = base.read_text(encoding="utf-8").strip()
+                base_content, _ = _parse_skill_header(base_raw)
+                content = f"{base_content}\n\n{content}"
+        return content, version
 
     return "", "0"
 
@@ -204,7 +211,10 @@ def _build_user_prompt(
     memory_context: list[dict] | None = None,
     competitor_url: str = "",
     website_brief: str = "",
+    website_strategy: str = "",
     product_image_url: str = "",
+    existing_site_html: str = "",
+    revision_request: str = "",
 ) -> str:
     parts = [
         f'Company: "{company_name}"',
@@ -217,6 +227,30 @@ def _build_user_prompt(
 
     if website_brief:
         parts.append(f"\n--- BRIEF CREATIF WEBSITE ---\n{website_brief}\n--- FIN BRIEF ---")
+
+    if website_strategy:
+        parts.append(
+            "\n--- SITE SPEC / WEBSITE STRATEGY (OBLIGATOIRE) ---\n"
+            f"{website_strategy}\n"
+            "--- FIN SITE SPEC ---\n"
+            "Tu dois utiliser ce SITE SPEC comme source principale pour la direction artistique, "
+            "la structure, les CTA, les trust signals et le style visuel."
+        )
+
+    if existing_site_html:
+        parts.append(
+            "\n--- SITE EXISTANT A REVISER ---\n"
+            f"{existing_site_html[:12000]}\n"
+            "--- FIN SITE EXISTANT ---"
+        )
+
+    if revision_request:
+        parts.append(
+            "\n--- DEMANDE UTILISATEUR POUR LA REVISION ---\n"
+            f"{revision_request}\n"
+            "--- FIN DEMANDE ---\n"
+            "Applique cette demande précisément. Garde le produit, l'offre et les CTA cohérents."
+        )
 
     if product_image_url:
         parts.append(
@@ -297,7 +331,10 @@ async def execute_agent(
     company_slug: str = "default",
     competitor_url: str = "",
     website_brief: str = "",
+    website_strategy: str = "",
     product_image_url: str = "",
+    existing_site_html: str = "",
+    revision_request: str = "",
 ) -> AgentResult:
     settings = get_settings()
     catalog = MISSION_CATALOG.get(mission_type)
@@ -334,7 +371,10 @@ async def execute_agent(
         memory_context=memory_context,
         competitor_url=competitor_url,
         website_brief=website_brief,
+        website_strategy=website_strategy,
         product_image_url=product_image_url,
+        existing_site_html=existing_site_html,
+        revision_request=revision_request,
     )
 
     if quality_feedback:

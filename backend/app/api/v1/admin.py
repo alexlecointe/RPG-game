@@ -84,6 +84,80 @@ async def admin_deploy_landing(company_id: str, db: DbSession):
     return {"deployed": True, "platform": "gateway", "slug": slug, "site_url": site_url, "version": artifact.version}
 
 
+@router.post("/sites/repair/{company_id}")
+async def admin_repair_site(
+    company_id: str,
+    clear_product_image: bool = True,
+    db: DbSession = None,
+):
+    """Repair a published site from the latest completed landing_page deliverable."""
+    from sqlalchemy import select as sa_select, text as sa_text
+    from app.models.entities import Mission, MissionStatus
+    from app.services.company import CompanyService
+    from app.services.site_hosting import (
+        build_gateway_url,
+        publish_site,
+        replace_image_url_with_product_placeholder,
+        sanitize_site_html,
+    )
+
+    await db.execute(sa_text(f"SET LOCAL app.current_company_id = '{company_id}'"))
+
+    svc = CompanyService(db)
+    company = await svc.get_company(company_id)
+    if not company:
+        return {"error": "Company not found"}
+    slug = company.slug or ""
+    if not slug:
+        return {"error": "Company has no slug"}
+
+    result = await db.execute(
+        sa_select(Mission)
+        .where(
+            Mission.company_id == company_id,
+            Mission.mission_type == "landing_page",
+            Mission.status == MissionStatus.COMPLETED,
+        )
+        .order_by(Mission.completed_at.desc())
+        .limit(1)
+    )
+    mission = result.scalar_one_or_none()
+    if not mission or not mission.deliverable:
+        return {"error": "No completed landing_page mission found"}
+
+    old_image_url = company.product_image_url or ""
+    html = sanitize_site_html(mission.deliverable)
+    image_removed = False
+    if clear_product_image and old_image_url:
+        repaired = replace_image_url_with_product_placeholder(
+            html,
+            old_image_url,
+            company_name=company.name,
+            product_description=company.product_description or company.mission_statement or "",
+        )
+        image_removed = repaired != html
+        html = repaired
+        company.product_image_url = None
+
+    artifact = await publish_site(
+        db,
+        company_id=company_id,
+        slug=slug,
+        html_content=html,
+        mission_id=mission.id,
+    )
+    await db.commit()
+
+    site_url = build_gateway_url(slug)
+    return {
+        "repaired": True,
+        "slug": slug,
+        "site_url": site_url,
+        "version": artifact.version,
+        "image_removed": image_removed,
+    }
+
+
 @router.get("/overview", response_model=AdminOverview)
 async def admin_overview(days: int = 30, db: DbSession = None):
     since = datetime.now(timezone.utc) - timedelta(days=days)

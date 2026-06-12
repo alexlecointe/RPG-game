@@ -64,10 +64,28 @@ Si un "BRIEF CREATIF WEBSITE" est present dans le contexte :
 - La structure de page recommandee remplace la structure generique ci-dessus
 - Le CTA et les trust signals sont adaptes au vrai produit — utilise-les
 
+## Utilisation du SITE SPEC
+Si un "SITE SPEC / WEBSITE STRATEGY" est present dans le contexte :
+- Traite-le comme une maquette obligatoire, pas comme une inspiration optionnelle.
+- Respecte le playbook_key, le hero_pattern, le layout_recipe et la palette.
+- Les mandatory_visuals doivent etre visibles dans le HTML final.
+- Les quality_rules doivent etre satisfaites explicitement dans les sections.
+- Les anti_patterns sont interdits.
+- Le hero doit montrer le produit, l'interface ou le resultat final des le premier ecran.
+- La page doit sembler creee pour cette marque precise, pas pour n'importe quelle startup.
+
 ## Image produit
 - Si "IMAGE PRODUIT PRÉ-GÉNÉRÉE" est presente dans le contexte : utilise cette URL en <img> dans le hero ET product showcase.
 - Si aucune image n'est disponible : utilise un placeholder CSS elegant (gradient + emoji adapte au produit).
 - L'image est generee en amont par le systeme — tu n'as PAS besoin de la generer toi-meme.
+
+## Niveau visuel attendu
+- Utilise une grille responsive, de vrais espacements, une hierarchie typographique nette et des sections contrastees.
+- Ajoute des details de design utiles : badges, preuves, micro-copy, cartes, mockups CSS si aucun asset n'existe.
+- Pour SaaS : cree un mockup dashboard/interface en HTML/CSS dans le hero.
+- Pour app : cree un mockup telephone en HTML/CSS avec 2-3 ecrans simules.
+- Pour e-commerce : l'image produit, le prix/offre, la garantie/livraison et le CTA achat doivent etre visibles rapidement.
+- Evite les phrases generiques comme "solution innovante", "boostez votre croissance" ou "transformez votre business".
 
 ## Sortie
 - Ta reponse DOIT etre le HTML complet (<!DOCTYPE html>...</html>). Rien d'autre.

@@ -14,6 +14,7 @@ from app.workers.runner import schedule_mission_run
 router = APIRouter(dependencies=[Depends(verify_api_key)])
 
 AUTO_MISSIONS: list[str] = ["market_scan"]
+WEBSITE_MISSION_TYPES = ("landing_page", "landing_page_revision")
 
 
 async def _company_out(company, wallet) -> CompanyOut:
@@ -22,41 +23,49 @@ async def _company_out(company, wallet) -> CompanyOut:
     from app.core.database import SessionLocal
     settings = get_settings()
 
-    # Check if a live site artifact exists for this company
+    # Check if a live site artifact exists for this company. Website status is
+    # mission-aware: active generation beats an older live/completed quest state.
     site_url: str | None = None
     site_version: int | None = None
     site_status = "not_created"
     if company.slug:
         async with SessionLocal() as _db:
+            from sqlalchemy import select as _sel
+            from app.models.entities import Mission, MissionStatus as _MS
+
+            publishing = await _db.execute(
+                _sel(Mission)
+                .where(
+                    Mission.company_id == company.id,
+                    Mission.mission_type.in_(WEBSITE_MISSION_TYPES),
+                    Mission.status.in_([_MS.PENDING, _MS.RUNNING]),
+                )
+                .order_by(Mission.created_at.desc())
+                .limit(1)
+            )
+            is_publishing = publishing.scalar_one_or_none() is not None
+
             artifact = await get_live_artifact(_db, company.slug)
             if artifact:
                 site_url = build_gateway_url(company.slug)
                 site_version = artifact.version
-                site_status = "live"
+                site_status = "publishing" if is_publishing else "live"
+            elif is_publishing:
+                site_status = "publishing"
             else:
-                from sqlalchemy import select as _sel
-                from app.models.entities import Mission, MissionStatus as _MS
-                # Check if a landing_page mission is queued or currently running
-                publishing = await _db.execute(
-                    _sel(Mission).where(
+                # Check if last website mission failed
+                failed = await _db.execute(
+                    _sel(Mission)
+                    .where(
                         Mission.company_id == company.id,
-                        Mission.mission_type == "landing_page",
-                        Mission.status.in_([_MS.PENDING, _MS.RUNNING]),
-                    ).limit(1)
-                )
-                if publishing.scalar_one_or_none():
-                    site_status = "publishing"
-                else:
-                    # Check if last landing_page mission failed
-                    failed = await _db.execute(
-                        _sel(Mission).where(
-                            Mission.company_id == company.id,
-                            Mission.mission_type == "landing_page",
-                            Mission.status == _MS.FAILED,
-                        ).order_by(Mission.created_at.desc()).limit(1)
+                        Mission.mission_type.in_(WEBSITE_MISSION_TYPES),
+                        Mission.status == _MS.FAILED,
                     )
-                    if failed.scalar_one_or_none():
-                        site_status = "failed"
+                    .order_by(Mission.created_at.desc())
+                    .limit(1)
+                )
+                if failed.scalar_one_or_none():
+                    site_status = "failed"
     stripe_status = get_stripe_status(company)
     if company.stripe_connect_account_id:
         try:

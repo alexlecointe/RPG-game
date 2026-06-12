@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import re
+from html import escape
 
 import structlog
 from sqlalchemy import select
@@ -44,9 +45,12 @@ async def publish_site(
     html_content: str,
     mission_id: str | None = None,
     quality_score: float | None = None,
+    site_spec_json: str | None = None,
 ) -> "SiteArtifact":  # type: ignore[name-defined]
     """Publish a new site artifact, mark it as live, and archive old versions."""
     from app.models.entities import SiteArtifact
+
+    html_content = sanitize_site_html(html_content)
 
     # Get current version number
     result = await db.execute(
@@ -71,6 +75,7 @@ async def publish_site(
         company_id=company_id,
         slug=slug,
         html_content=html_content,
+        site_spec_json=site_spec_json,
         version=next_version,
         is_live=True,
         mission_id=mission_id,
@@ -104,9 +109,9 @@ async def get_live_artifact(db: AsyncSession, slug: str) -> "SiteArtifact | None
 
 async def prepare_site_html_for_checkout(db: AsyncSession, artifact: "SiteArtifact") -> str:  # type: ignore[name-defined]
     """Attach the latest Stripe Payment Link to purchase CTAs on hosted sites."""
-    fallback_html = artifact.html_content
-    company_id = artifact.company_id
-    slug = artifact.slug
+    fallback_html = sanitize_site_html(str(getattr(artifact, "html_content", "") or ""))
+    company_id = str(getattr(artifact, "company_id", "") or "")
+    slug = str(getattr(artifact, "slug", "") or "")
     try:
         payment_url = await _get_or_create_site_payment_link(db, artifact)
     except Exception as exc:
@@ -120,7 +125,16 @@ async def prepare_site_html_for_checkout(db: AsyncSession, artifact: "SiteArtifa
         return fallback_html
     if not payment_url:
         return fallback_html
-    return _inject_checkout_url(fallback_html, payment_url)
+    try:
+        return _inject_checkout_url(fallback_html, payment_url)
+    except Exception as exc:
+        logger.exception(
+            "site_checkout_inject_failed",
+            company_id=company_id,
+            slug=slug,
+            error=str(exc),
+        )
+        return fallback_html
 
 
 async def _get_or_create_site_payment_link(db: AsyncSession, artifact: "SiteArtifact") -> str:  # type: ignore[name-defined]
@@ -332,8 +346,14 @@ def _extract_price_cents(html: str) -> int | None:
 
 
 def _inject_checkout_url(html: str, payment_url: str) -> str:
+    updated = str(html or "")
+    payment_url = str(payment_url or "").strip()
+    if not payment_url:
+        return updated
+
     url_json = json.dumps(payment_url)
-    updated = re.sub(r"https://buy\.stripe\.com/PLACEHOLDER", payment_url, html, flags=re.IGNORECASE)
+    attr_url = payment_url.replace("&", "&amp;").replace('"', "&quot;")
+    updated = re.sub(r"https://buy\.stripe\.com/PLACEHOLDER", payment_url, updated, flags=re.IGNORECASE)
     for placeholder_pattern in (
         r"https://example\.com/(?:checkout|buy|order|preorder|pre-order)",
         r"https://www\.example\.com/(?:checkout|buy|order|preorder|pre-order)",
@@ -343,7 +363,7 @@ def _inject_checkout_url(html: str, payment_url: str) -> str:
     cta_words = (
         r"(?:commander|commander\s+maintenant|acheter|acheter\s+maintenant|"
         r"pré[- ]?commander|pre[- ]?order|order|order\s+now|buy|buy\s+now|"
-        r"checkout|panier|cart|shop)"
+        r"checkout|panier|cart|shop|purchase|payer|payment)"
     )
 
     def _rewrite_anchor(match: re.Match[str]) -> str:
@@ -354,34 +374,76 @@ def _inject_checkout_url(html: str, payment_url: str) -> str:
         if re.search(r"\bhref\s*=", attrs, flags=re.IGNORECASE):
             attrs = re.sub(
                 r"\bhref\s*=\s*(['\"])(.*?)\1",
-                f'href="{payment_url}"',
+                f'href="{attr_url}"',
                 attrs,
                 flags=re.IGNORECASE | re.DOTALL,
             )
         else:
-            attrs = f'{attrs} href="{payment_url}"'
+            attrs = f'{attrs} href="{attr_url}"'
         if not re.search(r"\bdata-rpg-checkout\s*=", attrs, flags=re.IGNORECASE):
             attrs = f'{attrs} data-rpg-checkout="true"'
         return f"<a{attrs}>{body}</a>"
 
+    def _rewrite_button(match: re.Match[str]) -> str:
+        attrs, body = match.group(1), match.group(2)
+        body_text = re.sub(r"<[^>]+>", " ", body)
+        if not re.search(cta_words, body_text, flags=re.IGNORECASE):
+            return match.group(0)
+        if not re.search(r"\bdata-rpg-checkout\s*=", attrs, flags=re.IGNORECASE):
+            attrs = f'{attrs} data-rpg-checkout="true"'
+        return f"<button{attrs}>{body}</button>"
+
     updated = re.sub(r"<a\b([^>]*)>(.*?)</a>", _rewrite_anchor, updated, flags=re.IGNORECASE | re.DOTALL)
+    updated = re.sub(r"<button\b([^>]*)>(.*?)</button>", _rewrite_button, updated, flags=re.IGNORECASE | re.DOTALL)
 
     script = f"""
 <script>
 (function () {{
   var checkoutUrl = {url_json};
-  var words = /commander|commander\\s+maintenant|acheter|acheter\\s+maintenant|pré[- ]?commander|pre[- ]?order|order|order\\s+now|buy|buy\\s+now|checkout|panier|cart|shop/i;
-  document.addEventListener('click', function (event) {{
-    var target = event.target && event.target.closest ? event.target.closest('a,button,[role="button"]') : null;
-    if (!target) return;
-    var isCheckoutCta = target.getAttribute('data-rpg-checkout') === 'true' || words.test((target.textContent || '').trim());
-    if (!isCheckoutCta) return;
-    var href = target.getAttribute('href') || '';
-    if (target.tagName === 'BUTTON' || !href || href === '#' || href.indexOf('javascript:') === 0 || href.charAt(0) === '/' || target.getAttribute('data-rpg-checkout') === 'true') {{
-      event.preventDefault();
-      window.location.href = checkoutUrl;
+  var words = /commander|commander\\s+maintenant|acheter|acheter\\s+maintenant|pré[- ]?commander|pre[- ]?order|order|order\\s+now|buy|buy\\s+now|checkout|panier|cart|shop|purchase|payer|payment/i;
+  var placeholderHref = /^(#|javascript:|\\/checkout|\\/buy|\\/order|\\/cart|\\/shop|\\/preorder|\\/pre-order|https?:\\/\\/(www\\.)?example\\.com|https?:\\/\\/buy\\.stripe\\.com\\/PLACEHOLDER)/i;
+
+  function describe(node) {{
+    if (!node || node.nodeType !== 1) return "";
+    return [
+      node.textContent || "",
+      node.getAttribute("aria-label") || "",
+      node.getAttribute("title") || "",
+      node.getAttribute("class") || "",
+      node.getAttribute("id") || "",
+      node.getAttribute("href") || ""
+    ].join(" ");
+  }}
+
+  function checkoutTarget(start) {{
+    var node = start;
+    var depth = 0;
+    while (node && node !== document.body && node.nodeType === 1 && depth < 8) {{
+      var tag = (node.tagName || "").toUpperCase();
+      var href = node.getAttribute ? (node.getAttribute("href") || "") : "";
+      var explicit = node.getAttribute && node.getAttribute("data-rpg-checkout") === "true";
+      var looksClickable = explicit || tag === "A" || tag === "BUTTON" || node.getAttribute("role") === "button" || node.onclick || node.getAttribute("onclick");
+      var looksCheckout = explicit || words.test(describe(node)) || placeholderHref.test(href);
+      if (looksClickable && looksCheckout) return node;
+      node = node.parentElement;
+      depth += 1;
     }}
-  }}, true);
+    return null;
+  }}
+
+  function go(event) {{
+    var target = checkoutTarget(event.target);
+    if (!target) return;
+    var href = target.getAttribute("href") || "";
+    var isCheckoutCta = target.getAttribute("data-rpg-checkout") === "true" || words.test(describe(target)) || placeholderHref.test(href);
+    if (!isCheckoutCta) return;
+    event.preventDefault();
+    if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+    window.location.assign(checkoutUrl);
+  }}
+
+  document.addEventListener("click", go, true);
+  document.addEventListener("touchend", go, true);
 }})();
 </script>"""
     if "rpgagent-checkout-injected" in updated:
@@ -390,3 +452,85 @@ def _inject_checkout_url(html: str, payment_url: str) -> str:
     if re.search(r"</body>", updated, flags=re.IGNORECASE):
         return re.sub(r"</body>", script + "\n</body>", updated, count=1, flags=re.IGNORECASE)
     return updated + script
+
+
+def sanitize_site_html(content: str) -> str:
+    """Keep only the actual HTML document from an LLM/deploy_site response."""
+    html = str(content or "").strip()
+    if not html:
+        return ""
+
+    fence_match = re.search(r"```(?:html)?\s*([\s\S]*?)```", html, flags=re.IGNORECASE)
+    if fence_match:
+        html = fence_match.group(1).strip()
+
+    doc_match = re.search(r"<!doctype\s+html[\s\S]*?</html>", html, flags=re.IGNORECASE)
+    if doc_match:
+        html = doc_match.group(0).strip()
+    else:
+        html_match = re.search(r"<html[\s\S]*?</html>", html, flags=re.IGNORECASE)
+        if html_match:
+            html = html_match.group(0).strip()
+
+    # Starlette encodes HTML responses as UTF-8; strip invalid surrogate chars
+    # so a single bad model token cannot turn a live site into a 500.
+    return html.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
+
+
+def replace_image_url_with_product_placeholder(
+    html: str,
+    image_url: str,
+    *,
+    company_name: str,
+    product_description: str = "",
+) -> str:
+    """Remove a known-bad generated product image from an existing site HTML."""
+    if not html or not image_url:
+        return html
+    safe_url = re.escape(image_url)
+    label = escape((product_description or company_name or "Produit").strip())
+    brand = escape((company_name or "Produit").strip())
+    placeholder = f"""
+<div class="rpg-product-placeholder" role="img" aria-label="{label}">
+  <div class="rpg-product-packshot">
+    <span>{brand}</span>
+    <small>{label}</small>
+  </div>
+</div>
+<style>
+.rpg-product-placeholder {{
+  min-height: 320px;
+  display: grid;
+  place-items: center;
+  border-radius: 24px;
+  background: radial-gradient(circle at 30% 20%, #ffffff 0, #f8f3ea 34%, #e7d8c2 100%);
+  border: 1px solid rgba(38, 69, 51, 0.18);
+}}
+.rpg-product-packshot {{
+  width: min(220px, 70%);
+  aspect-ratio: 3 / 4;
+  border-radius: 28px 28px 18px 18px;
+  background: linear-gradient(180deg, #ffffff, #f3f0e8);
+  box-shadow: 0 28px 70px rgba(18, 31, 24, 0.22);
+  display: grid;
+  place-items: center;
+  text-align: center;
+  color: #264533;
+  padding: 24px;
+  font-weight: 800;
+}}
+.rpg-product-packshot small {{
+  display: block;
+  margin-top: 12px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  opacity: 0.65;
+}}
+</style>
+""".strip()
+    return re.sub(
+        rf"<img\b[^>]*\bsrc\s*=\s*(['\"]){safe_url}\1[^>]*>",
+        placeholder,
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )

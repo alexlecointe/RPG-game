@@ -83,6 +83,7 @@ _COLUMN_MIGRATIONS: list[tuple[str, str, str, str]] = [
     ("quest_steps", "retry_count", "INTEGER DEFAULT 0", "INTEGER DEFAULT 0"),
     ("mission_logs", "level", "VARCHAR(10) DEFAULT 'info'", "VARCHAR(10) DEFAULT 'info'"),
     ("mission_logs", "metadata_json", "TEXT", "TEXT"),
+    ("site_artifacts", "site_spec_json", "TEXT", "TEXT"),
 ]
 
 

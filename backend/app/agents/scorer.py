@@ -286,6 +286,24 @@ async def score_deliverable(
             "has_analytics": "fbq(" in deliverable or "data-analytics" in h,
             "no_waitlist": not any(w in h for w in ["waitlist", "coming soon", "liste d'attente"]),
             "has_multiple_sections": h.count("<section") + h.count("class=\"section") >= 3,
+            "has_rich_css": sum(
+                1 for signal in [
+                    "display:grid", "display: grid", "display:flex", "display: flex",
+                    "border-radius", "box-shadow", "linear-gradient", "@media", "gap:",
+                ]
+                if signal in h
+            ) >= 5,
+            "hero_has_visual": any(
+                signal in h[:3500]
+                for signal in ["<img", "mockup", "iphone", "dashboard", "product"]
+            ),
+            "not_generic_copy": not any(
+                phrase in h
+                for phrase in [
+                    "votre solution", "solution innovante", "transformez votre business",
+                    "boostez votre croissance", "révolutionnez votre", "revolutionnez votre",
+                ]
+            ),
         }
         failed = [k for k, v in checks.items() if not v]
         if failed:

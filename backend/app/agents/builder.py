@@ -5,7 +5,7 @@ class BuilderAgent(BaseAgent):
     agent_id = "builder"
 
     async def run(self, mission_type: str, company_name: str, mission_statement: str) -> AgentResult:
-        if mission_type == "landing_page":
+        if mission_type in ("landing_page", "landing_page_revision"):
             html = f"""<!DOCTYPE html>
 <html lang="fr">
 <head>

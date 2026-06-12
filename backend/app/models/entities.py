@@ -346,6 +346,7 @@ class SiteArtifact(Base):
     company_id: Mapped[str] = mapped_column(ForeignKey("companies.id"), index=True)
     slug: Mapped[str] = mapped_column(String(100), index=True)
     html_content: Mapped[str] = mapped_column(Text)
+    site_spec_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     is_live: Mapped[bool] = mapped_column(Boolean, default=True)
     mission_id: Mapped[Optional[str]] = mapped_column(

@@ -233,6 +233,61 @@ class MissionService:
         )
         self.db.add(mission)
         await self.db.flush()
+        self.db.add(
+            MissionLog(
+                mission_id=mission.id,
+                step="created",
+                message=f"Tâche créée : {title}",
+            )
+        )
+        await self.db.commit()
+
+        if auto_schedule:
+            schedule_mission_run(mission.id)
+
+        await self.db.refresh(mission)
+        return mission
+
+    async def create_catalog_task(
+        self,
+        company_id: str,
+        mission_type: str,
+        title: str,
+        description: str = "",
+        source: TaskSource = TaskSource.USER,
+        auto_schedule: bool = False,
+    ) -> Mission:
+        """Create a queued task for an explicit catalog mission type."""
+        catalog = MISSION_CATALOG.get(mission_type)
+        if not catalog:
+            raise ValueError("unknown_mission_type")
+
+        company = await self.company_svc.get_company(company_id)
+        if not company:
+            raise ValueError("company_not_found")
+
+        if catalog.credits_cost > 0:
+            from app.services.billing import get_or_create_subscription
+            sub = await get_or_create_subscription(self.db, company)
+            total_credits = (sub.credits_remaining or 0) + (sub.pack_credits or 0)
+            if total_credits <= 0:
+                raise ValueError("no_credits")
+
+        queue_order = await self._next_queue_order(company_id)
+        mission = Mission(
+            company_id=company_id,
+            agent_type=catalog.agent_type,
+            mission_type=mission_type,
+            title=title,
+            description=description or None,
+            source=source,
+            status=MissionStatus.PENDING,
+            queue_order=queue_order,
+            credits_cost=1 if catalog.credits_cost > 0 else 0,
+            xp_reward=int(catalog.credits_cost * 1.5) or 5,
+        )
+        self.db.add(mission)
+        await self.db.flush()
         self.db.add(MissionLog(mission_id=mission.id, step="created", message=f"Tâche créée : {title}"))
         await self.db.commit()
 

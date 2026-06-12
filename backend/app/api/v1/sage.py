@@ -11,10 +11,27 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import DbSession, verify_api_key
 from app.core.config import get_settings
-from app.models.entities import Company, Mission, MissionStatus, QuestStep, QuestStepStatus
+from app.models.entities import (
+    Company,
+    Mission,
+    MissionStatus,
+    QuestStep,
+    QuestStepStatus,
+    SiteArtifact,
+    TaskSource,
+)
 from app.services.quest_chain import BUILDING_NAMES
 
 router = APIRouter(dependencies=[Depends(verify_api_key)])
+
+
+WEBSITE_WORDS = ("site", "website", "landing", "page", "hero", "homepage")
+WEBSITE_CHANGE_WORDS = (
+    "modifie", "modifier", "change", "changer", "ameliore", "améliore",
+    "ameliorer", "améliorer", "refais", "refaire", "rends", "mettre",
+    "mets", "ajoute", "ajouter", "retire", "supprime", "corrige",
+    "premium", "luxe", "stylé", "style", "vibe",
+)
 
 
 class SageMessageIn(BaseModel):
@@ -26,6 +43,11 @@ class SageMessageOut(BaseModel):
     reply: str
     created_task_id: Optional[str] = None
     created_task_title: Optional[str] = None
+
+
+def _is_website_revision_request(message: str) -> bool:
+    msg = message.lower()
+    return any(w in msg for w in WEBSITE_WORDS) and any(w in msg for w in WEBSITE_CHANGE_WORDS)
 
 
 # ---------------------------------------------------------------------------
@@ -201,7 +223,7 @@ async def sage_chat(company_id: str, body: SageMessageIn, db: DbSession):
     missions = list(mission_result.scalars().all())
 
     # Fetch pending task queue + subscription for context
-    from app.models.entities import MissionStatus as MS, TaskSource
+    from app.models.entities import MissionStatus as MS
     pending_result = await db.execute(
         select(Mission)
         .where(Mission.company_id == company_id, Mission.status == MS.PENDING)
@@ -212,6 +234,49 @@ async def sage_chat(company_id: str, body: SageMessageIn, db: DbSession):
 
     from app.services.billing import get_subscription_status
     sub_info = await get_subscription_status(db, company_id)
+
+    if _is_website_revision_request(body.message):
+        from app.services.mission import MissionService
+
+        latest_site_result = await db.execute(
+            select(SiteArtifact)
+            .where(SiteArtifact.company_id == company_id)
+            .order_by(SiteArtifact.version.desc())
+            .limit(1)
+        )
+        latest_site = latest_site_result.scalar_one_or_none()
+        mission_type = "landing_page_revision" if latest_site else "landing_page"
+        title = "Réviser le site" if latest_site else "Créer le site"
+        svc = MissionService(db)
+        try:
+            mission = await svc.create_catalog_task(
+                company_id=company_id,
+                mission_type=mission_type,
+                title=title,
+                description=body.message,
+                source=TaskSource.CEO_PROPOSAL,
+                auto_schedule=False,
+            )
+            reply = (
+                "Parfait, j'ai ajouté une révision du site à la file. "
+                "Le Builder gardera la version actuelle comme base et republiera une nouvelle version."
+                if latest_site
+                else (
+                    "Je n'ai pas trouvé de site existant, donc j'ai ajouté la création "
+                    "du site à la file."
+                )
+            )
+            return SageMessageOut(
+                reply=reply,
+                created_task_id=mission.id,
+                created_task_title=mission.title or mission.mission_type,
+            )
+        except ValueError as exc:
+            if str(exc) == "no_credits":
+                return SageMessageOut(
+                    reply="Tu n'as plus de crédits pour lancer cette modification du site."
+                )
+            return SageMessageOut(reply=f"Je n'ai pas pu créer la tâche Website : {exc}")
 
     system_prompt = _build_sage_system_prompt(company, quest_steps, missions, pending_tasks, sub_info)
 

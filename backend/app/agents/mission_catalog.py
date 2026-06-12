@@ -15,6 +15,18 @@ MISSION_CATALOG: dict[str, MissionCatalogItem] = {
         max_images=5,
         max_context_tokens=6000,
     ),
+    "landing_page_revision": MissionCatalogItem(
+        mission_type="landing_page_revision",
+        agent_type=AgentType.BUILDER,
+        title="Réviser le site",
+        description="Nouvelle version du site à partir d'une demande AI Punk.",
+        credits_cost=1,
+        estimated_minutes=6,
+        output_format="html",
+        complexity=5,
+        max_images=5,
+        max_context_tokens=7000,
+    ),
     "product_brief": MissionCatalogItem(
         mission_type="product_brief",
         agent_type=AgentType.BUILDER,
