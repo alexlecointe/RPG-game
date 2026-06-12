@@ -382,7 +382,7 @@ async def launch_meta_campaign(
     await db.flush()
 
     optimization_goal = {
-        "OUTCOME_SALES": "LINK_CLICKS",
+        "OUTCOME_SALES": "OFFSITE_CONVERSIONS" if settings.meta_pixel_id else "LINK_CLICKS",
         "OUTCOME_APP_INSTALLS": "APP_INSTALLS",
         "OUTCOME_LEADS": "LEAD_GENERATION",
     }.get(objective, "LINK_CLICKS")
@@ -406,21 +406,28 @@ async def launch_meta_campaign(
         campaign.meta_campaign_id = meta_campaign_id
 
         # Ad set PAUSED
+        adset_payload = {
+            "access_token": token,
+            "name": f"{campaign.name} AdSet",
+            "campaign_id": meta_campaign_id,
+            "daily_budget": str(budget),
+            "billing_event": "IMPRESSIONS",
+            "optimization_goal": optimization_goal,
+            "bid_amount": "200",
+            "status": "PAUSED",
+            "targeting": json.dumps(targeting_data),
+            "dsa_beneficiary": dsa_beneficiary,
+            "dsa_payor": dsa_payor,
+        }
+        if settings.meta_pixel_id and objective == "OUTCOME_SALES":
+            adset_payload["promoted_object"] = json.dumps({
+                "pixel_id": settings.meta_pixel_id,
+                "custom_event_type": "PURCHASE",
+            })
+
         resp = await client.post(
             f"{META_GRAPH}/{act_id}/adsets",
-            data={
-                "access_token": token,
-                "name": f"{campaign.name} AdSet",
-                "campaign_id": meta_campaign_id,
-                "daily_budget": str(budget),
-                "billing_event": "IMPRESSIONS",
-                "optimization_goal": optimization_goal,
-                "bid_amount": "200",
-                "status": "PAUSED",
-                "targeting": json.dumps(targeting_data),
-                "dsa_beneficiary": dsa_beneficiary,
-                "dsa_payor": dsa_payor,
-            },
+            data=adset_payload,
         )
         if resp.status_code >= 400:
             raise ValueError(f"meta_adset_create_failed: {resp.text[:500]}")
@@ -1349,6 +1356,19 @@ async def _reconcile_meta_campaign_objects(
                     changed = True
 
             if campaign.meta_ad_set_id and should_fetch_ads:
+                if settings.meta_pixel_id and campaign.objective == "OUTCOME_SALES":
+                    fix_resp = await client.post(
+                        f"{META_GRAPH}/{campaign.meta_ad_set_id}",
+                        data={
+                            "access_token": token,
+                            "promoted_object": json.dumps({
+                                "pixel_id": settings.meta_pixel_id,
+                                "custom_event_type": "PURCHASE",
+                            }),
+                        },
+                    )
+                    fix_resp.raise_for_status()
+
                 resp = await client.get(
                     f"{META_GRAPH}/{campaign.meta_ad_set_id}/ads",
                     params={

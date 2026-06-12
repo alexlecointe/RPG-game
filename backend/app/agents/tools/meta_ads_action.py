@@ -268,7 +268,7 @@ async def create_ad_set(
     dsa_payor = (settings.meta_dsa_payor or dsa_beneficiary).strip()
 
     optimization_goal = {
-        "OUTCOME_SALES": "LINK_CLICKS",
+        "OUTCOME_SALES": "OFFSITE_CONVERSIONS" if settings.meta_pixel_id else "LINK_CLICKS",
         "OUTCOME_APP_INSTALLS": "APP_INSTALLS",
         "OUTCOME_LEADS": "LEAD_GENERATION",
     }.get(objective, "LINK_CLICKS")
@@ -284,22 +284,29 @@ async def create_ad_set(
     if custom_audience_ids:
         targeting["custom_audiences"] = [{"id": aid} for aid in custom_audience_ids]
 
+    payload = {
+        "access_token": access_token,
+        "name": ad_set_name or "RPG Ad Set",
+        "campaign_id": campaign_id,
+        "daily_budget": str(daily_budget_cents or 1000),
+        "billing_event": "IMPRESSIONS",
+        "optimization_goal": optimization_goal,
+        "bid_amount": "200",
+        "status": status,
+        "targeting": json.dumps(targeting),
+        "dsa_beneficiary": dsa_beneficiary,
+        "dsa_payor": dsa_payor,
+    }
+    if settings.meta_pixel_id and objective == "OUTCOME_SALES":
+        payload["promoted_object"] = json.dumps({
+            "pixel_id": settings.meta_pixel_id,
+            "custom_event_type": "PURCHASE",
+        })
+
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(
             f"{META_GRAPH}/{act}/adsets",
-            data={
-                "access_token": access_token,
-                "name": ad_set_name or "RPG Ad Set",
-                "campaign_id": campaign_id,
-                "daily_budget": str(daily_budget_cents or 1000),
-                "billing_event": "IMPRESSIONS",
-                "optimization_goal": optimization_goal,
-                "bid_amount": "200",
-                "status": status,
-                "targeting": json.dumps(targeting),
-                "dsa_beneficiary": dsa_beneficiary,
-                "dsa_payor": dsa_payor,
-            },
+            data=payload,
         )
         resp.raise_for_status()
         data = resp.json()
