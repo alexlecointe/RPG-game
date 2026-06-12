@@ -299,24 +299,43 @@ async def _run_mission_inner(mission_id: str) -> None:
                                 await _upd.commit()
 
             while quality_retry <= MAX_QUALITY_RETRIES:
-                agent_result = await execute_agent(
-                    mission.agent_type,
-                    mission.mission_type,
-                    company.name,
-                    company.mission_statement,
-                    product_description=company.product_description,
-                    target_audience=company.target_audience,
-                    log_callback=log_step,
-                    chain_context=chain_context,
-                    business_type=company.business_type.value,
-                    memory_context=memory_context,
-                    quality_feedback=feedback_addendum or None,
-                    company_id=company.id,
-                    company_slug=company.slug or "default",
-                    competitor_url=company.competitor_url or "",
-                    website_brief=website_brief,
-                    product_image_url=product_image_url,
-                )
+                try:
+                    agent_result = await asyncio.wait_for(
+                        execute_agent(
+                            mission.agent_type,
+                            mission.mission_type,
+                            company.name,
+                            company.mission_statement,
+                            product_description=company.product_description,
+                            target_audience=company.target_audience,
+                            log_callback=log_step,
+                            chain_context=chain_context,
+                            business_type=company.business_type.value,
+                            memory_context=memory_context,
+                            quality_feedback=feedback_addendum or None,
+                            company_id=company.id,
+                            company_slug=company.slug or "default",
+                            competitor_url=company.competitor_url or "",
+                            website_brief=website_brief,
+                            product_image_url=product_image_url,
+                        ),
+                        timeout=120 if mission.mission_type == "market_scan" else 900,
+                    )
+                except asyncio.TimeoutError:
+                    if mission.mission_type != "market_scan":
+                        raise
+                    if log_step:
+                        await log_step(
+                            "timeout_fallback",
+                            "Market scan trop long — completion avec livrable local.",
+                        )
+                    from app.agents.researcher import ResearcherAgent
+
+                    agent_result = await ResearcherAgent().run(
+                        mission.mission_type,
+                        company.name,
+                        company.mission_statement,
+                    )
                 if agent_result.tool_calls and log_step:
                     for tc in agent_result.tool_calls:
                         await log_step(

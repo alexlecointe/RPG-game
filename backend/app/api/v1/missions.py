@@ -123,7 +123,7 @@ async def get_mission(mission_id: str, db: DbSession):
 @router.post("/missions/{mission_id}/retry")
 async def retry_mission(mission_id: str, db: DbSession):
     """Re-fire the runner for a mission stuck in pending/running."""
-    from app.workers.runner import schedule_mission_run
+    from app.workers.runner import _release_mission_lock, schedule_mission_run
     from app.models.entities import MissionStatus as MS
 
     svc = MissionService(db)
@@ -138,6 +138,7 @@ async def retry_mission(mission_id: str, db: DbSession):
     mission.started_at = None
     mission.error_message = None
     await db.commit()
+    await _release_mission_lock(mission_id)
     schedule_mission_run(mission_id)
     return {"ok": True, "mission_id": mission_id, "status": "retrying"}
 

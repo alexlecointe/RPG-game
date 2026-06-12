@@ -7,9 +7,9 @@ from app.core.config import get_settings
 from app.models.entities import BetaFeedback, Mission, MissionLog, MissionStatus, QuestStepStatus
 from app.schemas.api import BetaFeedbackCreate, BetaFeedbackOut, CompanyCreate, CompanyOut, WalletOut
 from app.services.company import CompanyService
+from app.services.mission import MissionService
 from app.services.quest_chain import QuestChainService
 from app.services.wallet import WalletService
-from app.workers.runner import schedule_mission_run
 
 router = APIRouter(dependencies=[Depends(verify_api_key)])
 
@@ -114,10 +114,14 @@ async def create_company(user_id: str, body: CompanyCreate, db: DbSession):
 
 
 async def _launch_auto_missions(db, company):
+    from datetime import datetime, timezone
+
+    from app.agents.researcher import ResearcherAgent
     from app.services.quest_chain import QuestChainService
 
     chain_svc = QuestChainService(db)
     step1 = await chain_svc.get_step(company.id, 1)
+    mission_svc = MissionService(db)
 
     for mission_type in AUTO_MISSIONS:
         catalog = MISSION_CATALOG.get(mission_type)
@@ -134,24 +138,29 @@ async def _launch_auto_missions(db, company):
         )
         db.add(mission)
         await db.flush()
+        mission.status = MissionStatus.RUNNING
+        mission.started_at = datetime.now(timezone.utc)
         db.add(MissionLog(
             mission_id=mission.id,
             step="auto_created",
             message=f"Mission {mission_type} lancee automatiquement",
         ))
+        db.add(MissionLog(
+            mission_id=mission.id,
+            step="agent_started",
+            message="Agent en route...",
+        ))
         if step1 and step1.mission_type == mission_type and step1.status == QuestStepStatus.AVAILABLE:
             await chain_svc.mark_step_running(company.id, 1, mission.id)
-    await db.commit()
-
-    result = await db.execute(
-        select(Mission).where(
-            Mission.company_id == company.id,
-            Mission.is_auto_generated == True,
-            Mission.status == MissionStatus.PENDING,
-        )
-    )
-    for mission in result.scalars().all():
-        schedule_mission_run(mission.id)
+        if mission_type == "market_scan":
+            result = await ResearcherAgent().run(
+                mission_type,
+                company.name,
+                company.mission_statement,
+            )
+            mission.quality_score = 10
+            mission.quality_feedback = "Auto-onboarding market scan"
+            await mission_svc.complete_mission(mission, result.format, result.content)
 
 
 @router.get("/{company_id}", response_model=CompanyOut)
