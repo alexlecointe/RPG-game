@@ -55,12 +55,17 @@ celery_app.conf.update(
             "task": "app.workers.celery_app.resume_god_mode_loops_task",
             "schedule": 600.0,  # every 10 minutes — restart loops if worker restarted
         },
+        "recover-stuck-missions": {
+            "task": "app.workers.celery_app.recover_stuck_missions",
+            "schedule": 120.0,  # every 2 minutes — requeue missions never picked up
+        },
     },
 )
 
 celery_app.conf.task_routes = {
     "app.workers.celery_app.run_mission_task": {"queue": "missions"},
     "app.workers.celery_app.check_recurring_missions": {"queue": "missions"},
+    "app.workers.celery_app.recover_stuck_missions": {"queue": "missions"},
     "app.workers.celery_app.run_god_mode_step": {"queue": "missions"},
     "app.workers.celery_app.launch_ads_task": {"queue": "ads"},
     "app.workers.celery_app.monitor_ads_campaigns": {"queue": "ads"},
@@ -274,13 +279,69 @@ def _compute_next_run(rm, now) -> "datetime":
 @celery_app.task(name="app.workers.celery_app.monitor_ads_campaigns")
 def monitor_ads_campaigns() -> dict:
     """Monitor Meta Ads performance for all companies with active campaigns."""
+    _validate_worker_runtime()
     return _run_async(_monitor_ads_async())
 
 
 @celery_app.task(name="app.workers.celery_app.charge_ads_wallets_daily")
 def charge_ads_wallets_daily() -> dict:
     """Charge daily ads budgets via Stripe for all companies with active campaigns."""
+    _validate_worker_runtime()
     return _run_async(_charge_ads_wallets_async())
+
+
+@celery_app.task(name="app.workers.celery_app.recover_stuck_missions")
+def recover_stuck_missions() -> dict:
+    """Requeue pending missions that were not picked up after dispatch."""
+    _validate_worker_runtime()
+    return _run_async(_recover_stuck_missions_async())
+
+
+async def _recover_stuck_missions_async() -> dict:
+    import structlog
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy import select
+
+    from app.core.database import SessionLocal
+    from app.models.entities import Mission, MissionLog, MissionStatus
+    from app.workers.runner import schedule_mission_run
+
+    logger = structlog.get_logger()
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=2)
+    recovered = 0
+
+    async with SessionLocal() as db:
+        result = await db.execute(
+            select(Mission)
+            .where(
+                Mission.status == MissionStatus.PENDING,
+                Mission.created_at < cutoff,
+                Mission.completed_at.is_(None),
+            )
+            .order_by(Mission.created_at.asc())
+            .limit(20)
+        )
+        missions = list(result.scalars().all())
+
+        for mission in missions:
+            db.add(MissionLog(
+                mission_id=mission.id,
+                step="auto_requeue",
+                message="Mission encore en attente — relance automatique du worker",
+            ))
+            schedule_mission_run(mission.id)
+            recovered += 1
+            logger.warning(
+                "mission_auto_requeued",
+                mission_id=mission.id,
+                company_id=mission.company_id,
+                mission_type=mission.mission_type,
+            )
+
+        if recovered:
+            await db.commit()
+
+    return {"recovered": recovered}
 
 
 async def _monitor_ads_async() -> dict:
@@ -313,6 +374,7 @@ async def _monitor_ads_async() -> dict:
 @celery_app.task(name="app.workers.celery_app.expire_god_mode_sessions_task")
 def expire_god_mode_sessions_task() -> dict:
     """Mark expired God Mode sessions (status=active but expires_at past)."""
+    _validate_worker_runtime()
     return _run_async(_expire_god_mode_async())
 
 
@@ -323,12 +385,14 @@ def expire_god_mode_sessions_task() -> dict:
 )
 def run_god_mode_step(self, company_id: str, god_session_id: str, step_index: int) -> dict:
     """Run one God Mode step (1 mission) then re-enqueue next step if session still active."""
+    _validate_worker_runtime()
     return _run_async(_god_mode_step_async(company_id, god_session_id, step_index))
 
 
 @celery_app.task(name="app.workers.celery_app.resume_god_mode_loops_task")
 def resume_god_mode_loops_task() -> dict:
     """On worker restart, re-enqueue God Mode steps for all active sessions without a running loop."""
+    _validate_worker_runtime()
     return _run_async(_resume_god_mode_loops_async())
 
 

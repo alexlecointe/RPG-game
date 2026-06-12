@@ -440,6 +440,12 @@ async def execute_task(mission_id: str, db: DbSession):
         raise HTTPException(400, detail=f"mission_not_pending (status: {mission.status.value})")
 
     from app.workers.runner import schedule_mission_run
+    db.add(MissionLog(
+        mission_id=mission.id,
+        step="queued",
+        message="Tâche envoyée au worker",
+    ))
+    await db.commit()
     schedule_mission_run(mission.id)
 
     await db.refresh(mission)

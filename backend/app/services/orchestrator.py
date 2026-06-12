@@ -13,6 +13,7 @@ from app.models.entities import (
     BusinessType,
     Company,
     CompanyNotification,
+    MissionLog,
     NotificationType,
     QuestStep,
     QuestStepStatus,
@@ -360,6 +361,12 @@ class OrchestratorService:
                 await chain_svc.mark_step_running(
                     company.id, step.step_number, mission.id
                 )
+                self._db.add(MissionLog(
+                    mission_id=mission.id,
+                    step="queued",
+                    message="Mission auto envoyée au worker",
+                ))
+                await self._db.commit()
                 from app.workers.runner import schedule_mission_run
                 schedule_mission_run(mission.id)
                 launched.append(step)
