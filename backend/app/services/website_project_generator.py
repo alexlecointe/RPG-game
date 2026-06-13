@@ -8,7 +8,6 @@ from typing import Any
 import structlog
 
 from app.agents.base import TokenStats
-from app.services.website_renderer import render_modular_site
 
 logger = structlog.get_logger()
 
@@ -73,28 +72,11 @@ async def generate_website_project(
     think and code like an engineering agent: project files, partials, routes,
     CSS, migration stub, and a final self-contained HTML entrypoint.
     """
-    fallback_html = render_modular_site(
-        company_name=company_name,
-        business_type=business_type,
-        company_profile_json=company_profile_json,
-        site_spec_json=site_spec_json,
-        product_image_url=product_image_url,
-        checkout_url=checkout_url,
-        meta_pixel_id=meta_pixel_id,
-        revision_request=revision_request,
-    )
-    fallback = WebsiteProject(
-        html=fallback_html,
-        files=_fallback_project_files(company_name, fallback_html),
-        engine="fallback_modular_renderer",
-        warnings=["llm_project_generation_unavailable"],
-    )
-
     from app.core.config import get_settings
 
     settings = get_settings()
     if not settings.openai_api_key and not settings.anthropic_api_key:
-        return fallback
+        raise RuntimeError("website_engineering_llm_not_configured")
 
     # For code generation, prefer the agent-coder model when available.
     provider = "anthropic" if settings.anthropic_api_key else "openai"
@@ -125,14 +107,14 @@ async def generate_website_project(
         warnings = _validate_project(files, html)
         if not html or "<html" not in html.lower() or "</html>" not in html.lower():
             logger.warning("website_project_missing_html", company_name=company_name)
-            fallback.warnings.append("llm_project_missing_entry_html")
-            fallback.provider = resp.provider
-            fallback.model = resp.model
-            fallback.token_stats = [_token_stats(resp)]
-            return fallback
-
-        for path, content in _fallback_project_files(company_name, html).items():
-            files.setdefault(path, content)
+            raise RuntimeError("website_project_missing_entry_html")
+        if warnings:
+            logger.warning(
+                "website_project_validation_failed",
+                company_name=company_name,
+                warnings=warnings,
+            )
+            raise RuntimeError("website_project_validation_failed:" + ";".join(warnings))
 
         return WebsiteProject(
             html=html,
@@ -145,8 +127,7 @@ async def generate_website_project(
         )
     except Exception as exc:
         logger.warning("website_project_generation_failed", error=str(exc), company_name=company_name)
-        fallback.warnings.append(f"llm_project_error:{str(exc)[:120]}")
-        return fallback
+        raise
 
 
 def project_manifest(project: WebsiteProject, *, site_spec_json: str) -> dict[str, Any]:
@@ -276,34 +257,6 @@ def _validate_project(files: dict[str, str], html: str) -> list[str]:
     if len(html) < 5000:
         warnings.append("entry_html_short")
     return warnings
-
-
-def _fallback_project_files(company_name: str, html: str) -> dict[str, str]:
-    safe_name = company_name or "Generated Site"
-    return {
-        "CLAUDE.md": f"# {safe_name}\n\nGenerated website project manifest.\n",
-        "package.json": json.dumps({
-            "scripts": {"start": "node server.js"},
-            "dependencies": {"express": "^4.19.2", "ejs": "^3.1.10"},
-        }, indent=2),
-        "server.js": (
-            "const express = require('express');\n"
-            "const app = express();\n"
-            "app.get('/', (_req, res) => res.send(require('fs').readFileSync('public/index.html', 'utf8')));\n"
-            "app.listen(process.env.PORT || 3000);\n"
-        ),
-        "render.yaml": "services:\n  - type: web\n    env: node\n    startCommand: npm start\n",
-        "migrate.js": "console.log('No database migration required for static landing page.');\n",
-        "db/index.js": "module.exports = {};\n",
-        "routes/api/email.js": "module.exports = require('express').Router();\n",
-        "views/layout.ejs": html,
-        "views/partials/nav.ejs": "",
-        "views/partials/hero.ejs": "",
-        "views/partials/proof.ejs": "",
-        "views/partials/closing.ejs": "",
-        "public/css/theme.css": "",
-        "public/index.html": html,
-    }
 
 
 def _json_or_text(value: str) -> Any:
