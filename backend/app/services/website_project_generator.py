@@ -104,7 +104,7 @@ async def generate_website_project(
         parsed = _parse_json_object(resp.content)
         files = _normalize_files(parsed.get("files"))
         html = str(parsed.get("entry_html") or parsed.get("html") or "").strip()
-        warnings = _validate_project(files, html)
+        warnings = _validate_project(files, html, meta_pixel_id=meta_pixel_id)
         if not html or "<html" not in html.lower() or "</html>" not in html.lower():
             logger.warning("website_project_missing_html", company_name=company_name)
             raise RuntimeError("website_project_missing_entry_html")
@@ -211,6 +211,9 @@ def _user_prompt(
         "- Local service/consultant must show offer, proof, process, booking CTA.\n"
         "- If product_image_url is present, use it prominently and do not replace it with random stock photos.\n"
         "- If product_image_url is missing, create a premium CSS product mockup instead of using unrelated photos.\n"
+        "- If meta_pixel_id is present, entry_html must include Meta Pixel fbq init + PageView in <head>.\n"
+        "- If meta_pixel_id is present, primary checkout CTAs must track InitiateCheckout before navigation.\n"
+        "- Primary checkout CTAs must include data-rpg-checkout=\"true\".\n"
         "- Do not invent testimonials, certifications, medical claims, revenue numbers, or legal claims.\n"
         "- entry_html must include CSS in a <style> tag because our gateway serves one HTML artifact.\n"
         "- Include responsive mobile design, strong first viewport, visible CTA, and no empty sections.\n"
@@ -249,13 +252,26 @@ def _normalize_files(value: Any) -> dict[str, str]:
     return files
 
 
-def _validate_project(files: dict[str, str], html: str) -> list[str]:
+def _validate_project(files: dict[str, str], html: str, *, meta_pixel_id: str = "") -> list[str]:
     warnings: list[str] = []
     missing = [path for path in REQUIRED_PROJECT_FILES if path not in files]
     if missing:
         warnings.append("missing_project_files:" + ",".join(missing[:8]))
     if len(html) < 5000:
         warnings.append("entry_html_short")
+    html_lower = (html or "").lower()
+    if meta_pixel_id:
+        pixel_id = str(meta_pixel_id).strip().lower()
+        if "fbq(" not in html_lower or "facebook.net" not in html_lower:
+            warnings.append("meta_pixel_script_missing")
+        if pixel_id and pixel_id not in html_lower:
+            warnings.append("meta_pixel_id_missing")
+        if "pageview" not in html_lower:
+            warnings.append("meta_pixel_pageview_missing")
+        if "initiatecheckout" not in html_lower:
+            warnings.append("meta_pixel_initiate_checkout_missing")
+    if 'data-rpg-checkout="true"' not in html_lower and "data-rpg-checkout='true'" not in html_lower:
+        warnings.append("checkout_cta_marker_missing")
     return warnings
 
 
