@@ -35,16 +35,7 @@ def render_modular_site(
         checkout_url=checkout_url,
         revision_request=revision_request,
     )
-    sections = [
-        _nav(context, theme),
-        _hero(context, theme),
-        _proof(context, theme),
-        _how_it_works(context, theme),
-        _benefits(context, theme),
-        _offer_or_pricing(context, theme),
-        _faq(context, theme),
-        _closing(context, theme),
-    ]
+    sections = _sections_for(context, theme)
     return "\n".join([
         "<!DOCTYPE html>",
         '<html lang="fr">',
@@ -93,6 +84,9 @@ def _context(
     hero_claim = str(profile.get("hero_claim") or positioning).strip()
     desired = str(profile.get("desired_outcome") or "un resultat clair et credible").strip()
     checkout = checkout_url or _cta_url(spec)
+    trust_signals = _list(spec.get("trust_signals"), [])
+    if not trust_signals:
+        trust_signals = _list(profile.get("proof_points"), ["Paiement securise", "Offre claire", "Support humain"])
     return {
         "brand": brand,
         "business_type": business_type,
@@ -104,15 +98,18 @@ def _context(
         "voice": str(profile.get("voice") or spec.get("brand_vibe") or "premium, clair, specifique"),
         "cta_label": _cta_label(business_type, spec),
         "checkout_url": checkout,
+        "price": _extract_price(profile, spec),
         "image_url": product_image_url,
         "usp": _list(profile.get("usp"), ["Concu pour le cas d'usage exact", "Simple a comprendre", "Credible des le premier ecran"]),
         "pain_points": _list(profile.get("pain_points"), ["Les alternatives sont trop generiques", "Le resultat attendu n'est pas assez clair"]),
         "objections": _list(profile.get("objections"), ["Est-ce fait pour moi ?", "Est-ce simple ?", "Est-ce credible ?"]),
         "proof_points": _list(profile.get("proof_points"), ["Preuves a renforcer avec donnees ou avis reels"]),
+        "trust_signals": trust_signals,
         "alternatives": _list(profile.get("alternatives_to_beat"), ["solution generique", "routine actuelle"]),
         "copy_bank": _list(profile.get("copy_bank"), [positioning]),
         "unknowns": _list(profile.get("unknowns"), []),
         "sections": _list(spec.get("section_blueprint") or spec.get("sections"), []),
+        "mandatory_visuals": _list(spec.get("mandatory_visuals"), []),
         "revision_request": revision_request,
     }
 
@@ -144,6 +141,34 @@ def _cta_url(spec: dict[str, Any]) -> str:
     cta = spec.get("cta") if isinstance(spec.get("cta"), dict) else {}
     url = str(cta.get("primary_url") or "").strip()
     return url or "https://buy.stripe.com/PLACEHOLDER"
+
+
+def _extract_price(profile: dict[str, Any], spec: dict[str, Any]) -> str:
+    candidates: list[Any] = []
+    for source in (spec, profile):
+        cta = source.get("cta") if isinstance(source.get("cta"), dict) else {}
+        offer = source.get("offer") if isinstance(source.get("offer"), dict) else {}
+        pricing = source.get("pricing") if isinstance(source.get("pricing"), dict) else {}
+        candidates.extend([
+            source.get("price"),
+            source.get("pricing"),
+            cta.get("price"),
+            offer.get("price"),
+            pricing.get("price"),
+            pricing.get("amount"),
+        ])
+    for value in candidates:
+        if isinstance(value, (int, float)) and value > 0:
+            return f"{value:g} EUR"
+        if isinstance(value, str):
+            match = re.search(
+                r"(?:€|\$|£)\s?\d+(?:[,.]\d{1,2})?|\d+(?:[,.]\d{1,2})?\s?(?:€|eur|usd|dollars?)",
+                value,
+                re.IGNORECASE,
+            )
+            if match:
+                return match.group(0).replace("eur", "EUR").replace("Eur", "EUR")
+    return ""
 
 
 def _fallback_playbook(business_type: str) -> str:
@@ -229,7 +254,8 @@ def _base_css(theme: dict[str, str]) -> str:
     .nav-inner {{ width:min(1180px, calc(100% - 40px)); margin:0 auto; min-height:72px; display:flex; align-items:center; justify-content:space-between; gap:24px; }}
     .brand {{ font-family:var(--head); font-size:22px; font-weight:700; letter-spacing:.08em; color:var(--primary); text-transform:uppercase; }}
     .nav-note {{ font-size:12px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }}
-    .btn {{ display:inline-flex; align-items:center; justify-content:center; min-height:48px; padding:0 22px; border-radius:999px; background:var(--primary); color:white; font-weight:800; box-shadow:0 18px 40px color-mix(in srgb, var(--primary) 24%, transparent); }}
+    .btn {{ display:inline-flex; align-items:center; justify-content:center; gap:8px; min-height:48px; padding:0 22px; border-radius:999px; background:var(--primary); color:white; font-weight:800; box-shadow:0 18px 40px color-mix(in srgb, var(--primary) 24%, transparent); transition:transform .16s ease, box-shadow .16s ease, background .16s ease; }}
+    .btn:hover {{ transform:translateY(-2px); box-shadow:0 24px 54px color-mix(in srgb, var(--primary) 30%, transparent); }}
     .btn.secondary {{ background:transparent; color:var(--primary); box-shadow:none; border:1px solid color-mix(in srgb, var(--primary) 24%, transparent); }}
     .hero {{ position:relative; overflow:hidden; padding:92px 20px 72px; }}
     .hero::before {{ content:""; position:absolute; inset:-20%; background:radial-gradient(circle at 82% 12%, color-mix(in srgb, var(--accent) 20%, transparent), transparent 34%), radial-gradient(circle at 12% 78%, color-mix(in srgb, var(--primary) 12%, transparent), transparent 36%); pointer-events:none; }}
@@ -260,6 +286,18 @@ def _base_css(theme: dict[str, str]) -> str:
     .offer {{ display:grid; grid-template-columns:1.1fr .9fr; gap:28px; align-items:center; padding:44px; border-radius:34px; background:var(--primary); color:white; overflow:hidden; position:relative; }}
     .offer p {{ color:color-mix(in srgb, white 78%, transparent); }}
     .offer .btn {{ background:white; color:var(--primary); box-shadow:none; }}
+    .price-pill {{ display:inline-flex; align-items:center; gap:10px; margin-top:22px; padding:10px 14px; border-radius:999px; background:color-mix(in srgb,var(--surface) 74%, transparent); border:1px solid color-mix(in srgb,var(--primary) 14%, transparent); color:var(--primary); font-weight:900; }}
+    .price-pill span {{ font-size:11px; color:var(--muted); letter-spacing:.09em; text-transform:uppercase; }}
+    .trust-row {{ display:flex; flex-wrap:wrap; gap:10px; margin-top:22px; }}
+    .trust-pill {{ padding:8px 12px; border-radius:999px; background:color-mix(in srgb,var(--soft) 58%, transparent); color:var(--primary); font-size:12px; font-weight:800; letter-spacing:.04em; }}
+    .section-kicker {{ max-width:720px; margin-bottom:38px; }}
+    .section-kicker .lead {{ margin-top:10px; }}
+    .comparison {{ display:grid; grid-template-columns:1fr 1fr; gap:22px; }}
+    .comparison-card {{ padding:30px; border-radius:28px; border:1px solid color-mix(in srgb,var(--primary) 12%, transparent); background:var(--surface); box-shadow:0 20px 60px rgba(15,25,20,.06); }}
+    .comparison-card.dark {{ background:var(--primary); color:white; }}
+    .comparison-card.dark p {{ color:color-mix(in srgb,white 78%, transparent); }}
+    .offer-buy-box {{ display:grid; gap:16px; justify-items:start; }}
+    .offer-price {{ font-family:var(--head); font-size:clamp(42px, 6vw, 72px); line-height:1; font-weight:800; letter-spacing:-.03em; }}
     .faq {{ display:grid; grid-template-columns:.8fr 1.2fr; gap:36px; }}
     details {{ border-bottom:1px solid color-mix(in srgb, var(--primary) 16%, transparent); padding:20px 0; }}
     summary {{ cursor:pointer; font-weight:800; }}
@@ -267,7 +305,7 @@ def _base_css(theme: dict[str, str]) -> str:
     @media (max-width: 860px) {{
       .nav-note {{ display:none; }}
       .hero {{ padding-top:64px; }}
-      .hero-grid, .grid-2, .offer, .faq {{ grid-template-columns:1fr; gap:34px; }}
+      .hero-grid, .grid-2, .offer, .faq, .comparison {{ grid-template-columns:1fr; gap:34px; }}
       .grid-3 {{ grid-template-columns:1fr; }}
       .stats {{ width:100%; }}
       .stat {{ flex:1; min-width:0; }}
@@ -282,6 +320,10 @@ def _visual_css(theme: dict[str, str], context: dict[str, Any]) -> str:
     .visual-wrap::before { content:""; position:absolute; width:82%; aspect-ratio:1; border-radius:50%; background:radial-gradient(circle, color-mix(in srgb, var(--soft) 70%, transparent), transparent 70%); }
     .product-image { position:relative; z-index:2; width:min(480px, 92%); border-radius:34px; box-shadow:0 42px 100px rgba(13,28,22,.22); object-fit:cover; aspect-ratio:4/5; background:var(--surface); }
     .product-render { position:relative; z-index:2; width:min(420px, 86%); aspect-ratio:4/5; display:grid; place-items:center; }
+    .product-stage { position:relative; z-index:2; width:min(560px, 100%); display:grid; grid-template-columns:.86fr 1fr; gap:18px; align-items:center; }
+    .product-stage .product-render { width:100%; }
+    .product-stage .product-photo { width:100%; aspect-ratio:1; border-radius:28px; transform:rotate(3deg); }
+    .product-render-premium::after { content:""; position:absolute; bottom:16%; width:54%; height:28px; border-radius:50%; background:radial-gradient(ellipse at center, rgba(15,36,25,.22), transparent 68%); filter:blur(10px); }
     .tube { width:46%; min-width:170px; aspect-ratio:1/2.65; border-radius:42px 42px 24px 24px; background:linear-gradient(130deg,#fff 0%,#f3eee5 52%,#d8c7ad 100%); box-shadow:0 34px 90px rgba(20,35,28,.28); position:relative; transform:rotate(-7deg); border:1px solid rgba(20,35,28,.08); }
     .tube::before { content:""; position:absolute; left:18%; right:18%; top:-28px; height:44px; border-radius:20px 20px 8px 8px; background:var(--primary); }
     .tube-label { position:absolute; inset:28% 12% 18%; border:1px solid color-mix(in srgb, var(--primary) 24%, transparent); border-radius:22px; display:grid; place-items:center; text-align:center; padding:16px; color:var(--primary); }
@@ -296,7 +338,36 @@ def _visual_css(theme: dict[str, str], context: dict[str, Any]) -> str:
     .phone { position:relative; z-index:2; width:min(310px, 78%); aspect-ratio:9/18; border-radius:42px; background:#111827; padding:14px; box-shadow:0 38px 100px rgba(10,20,36,.28); }
     .phone-screen { height:100%; border-radius:32px; background:linear-gradient(160deg,var(--surface),var(--soft)); padding:22px; display:grid; gap:14px; align-content:start; }
     .screen-card { min-height:74px; border-radius:18px; background:white; padding:14px; box-shadow:0 12px 34px rgba(10,20,36,.08); }
+    @media (max-width: 860px) {
+      .product-stage { grid-template-columns:1fr; max-width:360px; }
+      .product-stage .product-photo { transform:none; }
+    }
     """
+
+
+def _sections_for(context: dict[str, Any], theme: dict[str, str]) -> list[str]:
+    if context["business_type"] == "ecommerce":
+        return [
+            _nav(context, theme),
+            _ecommerce_hero(context, theme),
+            _ecommerce_proof(context, theme),
+            _ecommerce_benefits(context, theme),
+            _ecommerce_how(context, theme),
+            _ecommerce_comparison(context, theme),
+            _ecommerce_offer(context, theme),
+            _faq(context, theme),
+            _closing(context, theme),
+        ]
+    return [
+        _nav(context, theme),
+        _hero(context, theme),
+        _proof(context, theme),
+        _how_it_works(context, theme),
+        _benefits(context, theme),
+        _offer_or_pricing(context, theme),
+        _faq(context, theme),
+        _closing(context, theme),
+    ]
 
 
 def _nav(context: dict[str, Any], theme: dict[str, str]) -> str:
@@ -327,6 +398,149 @@ def _hero(context: dict[str, Any], theme: dict[str, str]) -> str:
         </div>
         <div class="visual-wrap">
           {_visual(context)}
+        </div>
+      </div>
+    </section>
+    """
+
+
+def _ecommerce_hero(context: dict[str, Any], theme: dict[str, str]) -> str:
+    price = context["price"]
+    price_html = f'<div class="price-pill">{escape(price)}<span>offre de lancement</span></div>' if price else ""
+    return f"""
+    <section class="hero ecommerce-hero" id="top">
+      <div class="hero-inner hero-grid">
+        <div>
+          <div class="eyebrow">{escape(_ecommerce_category(context))}</div>
+          <h1>{escape(context['hero_claim'])}</h1>
+          <p class="lead">{escape(context['positioning'])}</p>
+          {price_html}
+          <div class="hero-actions">
+            <a class="btn" href="{escape(context['checkout_url'])}" data-rpg-checkout="true">{escape(context['cta_label'])}</a>
+            <a class="btn secondary" href="#proof">Voir la preuve</a>
+          </div>
+          {_stats(context)}
+          {_trust_row(context)}
+        </div>
+        <div class="visual-wrap ecommerce-visual">
+          {_product_stage(context)}
+        </div>
+      </div>
+    </section>
+    """
+
+
+def _product_stage(context: dict[str, Any]) -> str:
+    image = ""
+    if context["image_url"]:
+        image = f'<img class="product-image product-photo" src="{escape(context["image_url"])}" alt="{escape(context["product"])}">'
+    return f"""
+    <div class="product-stage">
+      {_css_product_render(context)}
+      {image}
+    </div>
+    """
+
+
+def _css_product_render(context: dict[str, Any]) -> str:
+    return f"""
+    <div class="product-render product-render-premium" aria-label="{escape(context['product'])}">
+      <div class="tube"><div class="tube-label"><strong>{escape(context['brand'])}</strong><span>{escape(_product_short_name(context))}</span></div></div>
+    </div>
+    """
+
+
+def _ecommerce_proof(context: dict[str, Any], theme: dict[str, str]) -> str:
+    proof = context["proof_points"][0] if context["proof_points"] else context["positioning"]
+    return f"""
+    <section class="band surface" id="proof">
+      <div class="section-inner">
+        <div class="proof-card proof-card-dark">
+          <div class="eyebrow">Pourquoi ca existe</div>
+          <p class="quote">{escape(proof)}</p>
+          <p class="muted" style="margin-top:18px">{escape(context['alternatives'][0] if context['alternatives'] else context['positioning'])}</p>
+        </div>
+      </div>
+    </section>
+    """
+
+
+def _ecommerce_benefits(context: dict[str, Any], theme: dict[str, str]) -> str:
+    items = _take(context["usp"] + context["copy_bank"], 3, context["desired"])
+    return f"""
+    <section class="band">
+      <div class="section-inner">
+        <div class="section-kicker">
+          <div class="eyebrow">Benefices</div>
+          <h2>Ce que le produit change concretement.</h2>
+          <p class="lead">{escape(context['desired'])}</p>
+        </div>
+        <div class="grid-3">
+          {"".join(_benefit_card(item) for item in items)}
+        </div>
+      </div>
+    </section>
+    """
+
+
+def _ecommerce_how(context: dict[str, Any], theme: dict[str, str]) -> str:
+    return f"""
+    <section class="band surface">
+      <div class="section-inner">
+        <div class="section-kicker">
+          <div class="eyebrow">Usage</div>
+          <h2>Simple a comprendre, simple a acheter.</h2>
+          <p class="lead">{escape(context['product'])} est presente comme une offre claire, pas comme une promesse vague.</p>
+        </div>
+        <div class="grid-3">
+          {_step(1, "Comprendre", context["pain_points"][0] if context["pain_points"] else context["positioning"])}
+          {_step(2, "Choisir", context["usp"][0] if context["usp"] else context["desired"])}
+          {_step(3, "Passer a l'action", context["cta_label"])}
+        </div>
+      </div>
+    </section>
+    """
+
+
+def _ecommerce_comparison(context: dict[str, Any], theme: dict[str, str]) -> str:
+    alternative = context["alternatives"][0] if context["alternatives"] else "les alternatives generiques"
+    return f"""
+    <section class="band">
+      <div class="section-inner">
+        <div class="comparison">
+          <div class="comparison-card">
+            <div class="eyebrow">Avant</div>
+            <h3>{escape(_title_from(alternative))}</h3>
+            <p class="muted">{escape(alternative)}</p>
+          </div>
+          <div class="comparison-card dark">
+            <div class="eyebrow" style="color:white">Avec {escape(context['brand'])}</div>
+            <h3>{escape(_title_from(context['desired']))}</h3>
+            <p>{escape(context['desired'])}</p>
+          </div>
+        </div>
+      </div>
+    </section>
+    """
+
+
+def _ecommerce_offer(context: dict[str, Any], theme: dict[str, str]) -> str:
+    price = context["price"] or "Offre disponible"
+    return f"""
+    <section class="band surface">
+      <div class="section-inner">
+        <div class="offer ecommerce-offer">
+          <div>
+            <div class="eyebrow" style="color:white">Offre</div>
+            <h2>{escape(context['product'])}</h2>
+            <p>{escape(context['objections'][0] if context['objections'] else context['positioning'])}</p>
+            <div class="trust-row">{"".join(f'<span class="trust-pill">{escape(item[:42])}</span>' for item in context["trust_signals"][:3])}</div>
+          </div>
+          <div class="offer-buy-box">
+            <div class="offer-price">{escape(price)}</div>
+            <a class="btn" href="{escape(context['checkout_url'])}" data-rpg-checkout="true">{escape(context['cta_label'])}</a>
+            <p style="margin-top:16px">Pensé pour {escape(context['customer'])}.</p>
+          </div>
         </div>
       </div>
     </section>
@@ -494,6 +708,11 @@ def _step(number: int, title: str, body: str) -> str:
     return f'<div class="card"><div class="number">{number}</div><h3>{escape(title)}</h3><p>{escape(body)}</p></div>'
 
 
+def _benefit_card(body: str) -> str:
+    title = _title_from(body)
+    return f'<div class="card"><h3>{escape(title)}</h3><p>{escape(body)}</p></div>'
+
+
 def _mini_card(body: str) -> str:
     title = _title_from(body)
     return f'<div class="card"><h3>{escape(title)}</h3><p>{escape(body)}</p></div>'
@@ -512,6 +731,42 @@ def _title_from(text: str) -> str:
 def _strong_words(text: str) -> list[str]:
     words = [w for w in re.findall(r"[A-Za-zÀ-ÿ0-9']+", text) if len(w) >= 5]
     return words[:3]
+
+
+def _take(items: list[str], count: int, fallback: str) -> list[str]:
+    cleaned = [item for item in items if item]
+    while len(cleaned) < count:
+        cleaned.append(fallback)
+    return cleaned[:count]
+
+
+def _ecommerce_category(context: dict[str, Any]) -> str:
+    product = context["product"].lower()
+    if any(word in product for word in ["creme", "crème", "serum", "sérum", "lotion", "skin", "soin"]):
+        return "Soin premium"
+    if any(word in product for word in ["drink", "boisson", "cafe", "café", "food", "snack"]):
+        return "Produit gourmand"
+    if any(word in product for word in ["shirt", "hoodie", "bijou", "vetement", "vêtement"]):
+        return "Lifestyle"
+    if any(word in product for word in ["tech", "device", "gadget", "outil"]):
+        return "Produit tech"
+    return "Produit premium"
+
+
+def _product_short_name(context: dict[str, Any]) -> str:
+    product = context["product"].strip()
+    brand = context["brand"].strip()
+    if product.lower().startswith(brand.lower()):
+        product = product[len(brand):].strip(" -:·")
+    return product[:34] or "Premium product"
+
+
+def _trust_row(context: dict[str, Any]) -> str:
+    items = context["trust_signals"][:3]
+    if not items:
+        return ""
+    pills = "".join(f'<span class="trust-pill">{escape(item[:42])}</span>' for item in items)
+    return f'<div class="trust-row">{pills}</div>'
 
 
 def _analytics_script(meta_pixel_id: str) -> str:
