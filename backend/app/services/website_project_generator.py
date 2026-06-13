@@ -106,35 +106,44 @@ async def generate_website_project(
 
     last_error: Exception | None = None
     for provider in providers:
-        try:
-            resp = await call_simple(system_prompt, user_prompt, provider=provider, max_tokens=12000)
-            parsed = _parse_json_object(resp.content)
-            files = _normalize_files(parsed.get("files"))
-            html = str(parsed.get("entry_html") or parsed.get("html") or "").strip()
-            warnings = _validate_project(files, html, meta_pixel_id=meta_pixel_id)
-            if not html or "<html" not in html.lower() or "</html>" not in html.lower():
-                raise RuntimeError("website_project_missing_entry_html")
-            if warnings:
-                raise RuntimeError("website_project_validation_failed:" + ";".join(warnings))
+        provider_prompt = user_prompt
+        for attempt in range(2):
+            try:
+                resp = await call_simple(system_prompt, provider_prompt, provider=provider, max_tokens=12000)
+                parsed = _parse_json_object(resp.content)
+                files = _normalize_files(parsed.get("files"))
+                html = str(parsed.get("entry_html") or parsed.get("html") or "").strip()
+                warnings = _validate_project(files, html, meta_pixel_id=meta_pixel_id)
+                if not html or "<html" not in html.lower() or "</html>" not in html.lower():
+                    raise RuntimeError("website_project_missing_entry_html")
+                if warnings:
+                    raise RuntimeError("website_project_validation_failed:" + ";".join(warnings))
 
-            return WebsiteProject(
-                html=html,
-                files=files,
-                engine="llm_engineering_project",
-                provider=resp.provider,
-                model=resp.model,
-                token_stats=[_token_stats(resp)],
-                warnings=warnings,
-            )
-        except Exception as exc:
-            last_error = exc
-            logger.warning(
-                "website_project_provider_failed",
-                provider=provider,
-                error=str(exc)[:220],
-                company_name=company_name,
-            )
-            continue
+                return WebsiteProject(
+                    html=html,
+                    files=files,
+                    engine="llm_engineering_project",
+                    provider=resp.provider,
+                    model=resp.model,
+                    token_stats=[_token_stats(resp)],
+                    warnings=warnings,
+                )
+            except Exception as exc:
+                last_error = exc
+                error_text = str(exc)
+                logger.warning(
+                    "website_project_provider_failed",
+                    provider=provider,
+                    attempt=attempt + 1,
+                    error=error_text[:220],
+                    company_name=company_name,
+                )
+                if "credit balance is too low" in error_text.lower():
+                    break
+                if attempt == 0:
+                    provider_prompt = _repair_prompt(user_prompt, error_text)
+                    continue
+                break
 
     logger.warning("website_project_generation_failed", error=str(last_error), company_name=company_name)
     raise RuntimeError(f"website_project_generation_failed:{str(last_error)[:240]}")
@@ -215,6 +224,7 @@ def _user_prompt(
         + "\n\n"
         "Rules for the website:\n"
         "- The page must look intentionally designed for this exact business category.\n"
+        "- entry_html must be a real complete page, not a stub. Target at least 7000 characters.\n"
         "- E-commerce must show product image, concrete benefits, price/offer area, trust, and checkout CTA.\n"
         "- SaaS must show UI mockup, integrations/proof, pricing, and trial/demo CTA.\n"
         "- App/mobile must show a phone mockup, screens, waitlist/store CTA.\n"
@@ -222,7 +232,7 @@ def _user_prompt(
         "- If product_image_url is present, use it prominently and do not replace it with random stock photos.\n"
         "- If product_image_url is missing, create a premium CSS product mockup instead of using unrelated photos.\n"
         "- If meta_pixel_id is present, entry_html must include Meta Pixel fbq init + PageView in <head>.\n"
-        "- If meta_pixel_id is present, primary checkout CTAs must track InitiateCheckout before navigation.\n"
+        "- If meta_pixel_id is present, primary checkout CTAs must call fbq('track', 'InitiateCheckout', {value: price, currency: 'EUR'}) before navigation.\n"
         "- Primary checkout CTAs must include data-rpg-checkout=\"true\".\n"
         "- Do not invent testimonials, certifications, medical claims, revenue numbers, or legal claims.\n"
         "- entry_html must include CSS in a <style> tag because our gateway serves one HTML artifact.\n"
@@ -231,6 +241,19 @@ def _user_prompt(
         "- File contents can be concise but realistic: Express server, EJS partials, CSS theme, email route, migration stub.\n\n"
         "Business context JSON:\n"
         + json.dumps(payload, ensure_ascii=False, indent=2)
+    )
+
+
+def _repair_prompt(original_prompt: str, error_text: str) -> str:
+    return (
+        original_prompt
+        + "\n\nSTRICT REPAIR REQUIRED:\n"
+        + "Your previous response was rejected by validation.\n"
+        + f"Validation errors: {error_text[:800]}\n"
+        + "Return the same JSON shape again, but fix every validation error.\n"
+        + "Do not shorten entry_html. Include a complete <style> section, full body sections, "
+        + "data-rpg-checkout=\"true\" on checkout CTAs, and if meta_pixel_id is present include "
+        + "fbq init, PageView, and InitiateCheckout tracking.\n"
     )
 
 

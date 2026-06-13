@@ -943,8 +943,8 @@ struct RetroWebsiteSheet: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(websiteGenerationSteps, id: \.key) { stage in
-                    let done = websiteLogs.contains { stage.matchSteps.contains($0.step) }
-                    let current = !done && websiteLogs.last.map { stage.matchSteps.contains($0.step) } ?? false
+                    let done = websiteLogs.contains { stage.doneSteps.contains($0.step) }
+                    let current = !done && (websiteLogs.last.map { stage.startSteps.contains($0.step) } ?? false)
                     HStack(spacing: 8) {
                         if done {
                             Text("✓").font(mono(9)).foregroundStyle(.white.opacity(0.7)).frame(width: 12)
@@ -1000,16 +1000,47 @@ struct RetroWebsiteSheet: View {
     private struct WebsiteStage {
         let key: String
         let label: String
-        let matchSteps: [String]
+        let startSteps: [String]
+        let doneSteps: [String]
     }
 
     private var websiteGenerationSteps: [WebsiteStage] { [
-        WebsiteStage(key: "brief",    label: "DIRECTION CRÉATIVE",      matchSteps: ["website_brief", "website_brief_ready"]),
-        WebsiteStage(key: "context",  label: "CONTEXTE & MARCHÉ",       matchSteps: ["context_loaded", "memory_loaded"]),
-        WebsiteStage(key: "image",    label: "IMAGE PRODUIT",           matchSteps: ["product_image", "product_image_generating", "product_image_ready", "product_image_missing", "product_image_failed"]),
-        WebsiteStage(key: "build",    label: "CONSTRUCTION DU SITE",    matchSteps: ["agent_call", "deliverable_ready"]),
-        WebsiteStage(key: "quality",  label: "VÉRIFICATION QUALITÉ",    matchSteps: ["quality_check"]),
-        WebsiteStage(key: "deploy",   label: "DÉPLOIEMENT",             matchSteps: ["site_deployed"]),
+        WebsiteStage(
+            key: "brief",
+            label: "DIRECTION CRÉATIVE",
+            startSteps: ["website_strategy", "website_brief"],
+            doneSteps: ["website_brief_ready", "website_strategy_ready"]
+        ),
+        WebsiteStage(
+            key: "context",
+            label: "CONTEXTE & MARCHÉ",
+            startSteps: ["context_loaded", "memory_loaded"],
+            doneSteps: ["memory_loaded", "website_profile_ready"]
+        ),
+        WebsiteStage(
+            key: "image",
+            label: "IMAGE PRODUIT",
+            startSteps: ["product_image", "product_image_generating", "product_image_model"],
+            doneSteps: ["product_image_ready", "product_image_stored", "product_image_missing", "product_image_failed"]
+        ),
+        WebsiteStage(
+            key: "build",
+            label: "CONSTRUCTION DU SITE",
+            startSteps: ["website_engineering", "agent_call"],
+            doneSteps: ["website_project_ready", "deliverable_ready"]
+        ),
+        WebsiteStage(
+            key: "quality",
+            label: "VÉRIFICATION QUALITÉ",
+            startSteps: ["html_validation", "quality_check"],
+            doneSteps: ["html_validation", "quality_check"]
+        ),
+        WebsiteStage(
+            key: "deploy",
+            label: "DÉPLOIEMENT",
+            startSteps: ["site_deployed"],
+            doneSteps: ["site_deployed"]
+        ),
     ] }
 
     private func startWebsitePolling() {
