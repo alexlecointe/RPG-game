@@ -1,3 +1,4 @@
+import AVKit
 import SwiftUI
 
 // MARK: - Shared retro helpers
@@ -72,16 +73,24 @@ struct RetroAdsSheet: View {
     @State private var showBudgetEditor = false
     @State private var budgetInput = ""
     @State private var isSavingBudget = false
+    @State private var isChargingWallet = false
     @State private var budgetError: String?
+    @State private var walletMessage: String?
 
     // Per-campaign action loading: [campaignId: actionName]
     @State private var campaignLoading: [String: String] = [:]
     @State private var campaignError: String?
+    @State private var selectedCreative: AdCreative?
 
     private var companyId: String? { appState.company?.id }
 
     private var adsStep: QuestStep? {
-        appState.questChain.first { ($0.agentType == "marketer") && !$0.isCompleted }
+        appState.visibleQuestChain.first { ($0.agentType == "marketer") && !$0.isCompleted }
+    }
+
+    private var hasRenderedAds: Bool {
+        guard let s = summary else { return false }
+        return !s.campaigns.isEmpty || !s.creatives.isEmpty || s.activeCount > 0
     }
 
     var body: some View {
@@ -96,15 +105,20 @@ struct RetroAdsSheet: View {
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 12) {
 
-                        if let step = adsStep, step.isAvailable {
-                            questBanner(step: step)
+                        if let s = summary, hasRenderedAds {
+                            launchedAdsBanner(s)
                         } else if let step = adsStep, step.isRunning {
                             runningBanner(step: step)
+                        } else if let step = adsStep, step.isAvailable, summary != nil {
+                            questBanner(step: step)
                         }
 
                         if let s = summary {
                             balanceBudgetSection(s)
+                            performanceSection(s)
+                            launchTimelineSection(s)
                             budgetEditorSection(s)
+                            walletRechargeSection(s)
                             spendRollupSection(s)
                             campaignsSection(s)
                             creativesSection(s)
@@ -117,6 +131,9 @@ struct RetroAdsSheet: View {
                     .padding(.horizontal, 14).padding(.top, 14).padding(.bottom, 24)
                 }
             }
+        }
+        .sheet(item: $selectedCreative) { creative in
+            AdCreativePreviewSheet(creative: creative)
         }
         .task { await loadData() }
     }
@@ -160,6 +177,31 @@ struct RetroAdsSheet: View {
         .overlay(Rectangle().stroke(.white.opacity(0.5), lineWidth: 1))
     }
 
+    private func launchedAdsBanner(_ s: AdsSummary) -> some View {
+        retroSection("STATUT ADS") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(s.hasActiveDelivery ? "CAMPAGNE ACTIVE" : "CAMPAGNE PRÉPARÉE")
+                    .font(mono(12))
+                    .foregroundStyle(.white)
+
+                Text(s.hasActiveDelivery
+                     ? "La campagne existe déjà. Le bouton de relance est masqué pour éviter les doublons."
+                     : "La campagne existe déjà. Elle attend une action ou la prochaine étape de diffusion.")
+                    .font(mono(9))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if s.totalSpendCents == 0 {
+                    Text("Les métriques restent à 0 tant que Meta n'a pas commencé à dépenser.")
+                        .font(mono(8))
+                        .foregroundStyle(.white.opacity(0.35))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(12)
+        }
+    }
+
     // MARK: - Balance + budget stats
 
     private func balanceBudgetSection(_ s: AdsSummary) -> some View {
@@ -167,6 +209,83 @@ struct RetroAdsSheet: View {
             statBox(label: "SOLDE", value: s.walletFormatted)
             statBox(label: "BUDGET/JOUR", value: String(format: "$%.2f", Double(s.dailyBudgetCents) / 100))
             statBox(label: "DÉPENSÉ TOTAL", value: String(format: "$%.2f", Double(s.totalSpendCents) / 100))
+        }
+    }
+
+    private func performanceSection(_ s: AdsSummary) -> some View {
+        retroSection("PERFORMANCE") {
+            VStack(spacing: 10) {
+                HStack(spacing: 0) {
+                    metricCell("ROAS", s.purchaseRoasFormatted)
+                    metricCell("ACHATS", "\(s.totalPurchases ?? 0)")
+                    metricCell("CPA", s.costPerPurchaseFormatted)
+                    metricCell("VUES VID.", s.totalVideoViewsFormatted)
+                }
+                .padding(.vertical, 12)
+
+                if let message = s.actionableMessage, !message.isEmpty {
+                    Rectangle().frame(height: 1).foregroundStyle(.white.opacity(0.1))
+                    Text(message.uppercased())
+                        .font(mono(9))
+                        .foregroundStyle(.white.opacity(0.45))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(12)
+                }
+            }
+        }
+    }
+
+    private func launchTimelineSection(_ s: AdsSummary) -> some View {
+        let items = s.launchTimeline ?? []
+        return retroSection("TIMELINE LANCEMENT") {
+            VStack(spacing: 0) {
+                if items.isEmpty {
+                    Text("AUCUNE TIMELINE DISPONIBLE")
+                        .font(mono(10)).foregroundStyle(.white.opacity(0.3))
+                        .padding(12)
+                } else {
+                    ForEach(Array(items.enumerated()), id: \.element.id) { idx, item in
+                        if idx > 0 { Rectangle().frame(height: 1).foregroundStyle(.white.opacity(0.1)) }
+                        HStack(alignment: .top, spacing: 10) {
+                            Text(timelineGlyph(item.status))
+                                .font(mono(11))
+                                .foregroundStyle(timelineColor(item.status))
+                                .frame(width: 18, alignment: .leading)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.title.uppercased())
+                                    .font(mono(10)).foregroundStyle(.white)
+                                Text(item.detail)
+                                    .font(mono(8)).foregroundStyle(.white.opacity(0.42))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer()
+                            Text(item.status.uppercased())
+                                .font(mono(7))
+                                .foregroundStyle(.white.opacity(0.35))
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 9)
+                    }
+                }
+            }
+        }
+    }
+
+    private func timelineGlyph(_ status: String) -> String {
+        switch status {
+        case "done": return "✓"
+        case "running": return "…"
+        case "action": return "!"
+        default: return "·"
+        }
+    }
+
+    private func timelineColor(_ status: String) -> Color {
+        switch status {
+        case "done": return .white
+        case "running": return .white.opacity(0.75)
+        case "action": return .white.opacity(0.9)
+        default: return .white.opacity(0.35)
         }
     }
 
@@ -246,6 +365,45 @@ struct RetroAdsSheet: View {
                     .padding(12)
                 }
             }
+        }
+    }
+
+    private func walletRechargeSection(_ s: AdsSummary) -> some View {
+        retroSection("WALLET ADS") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("SOLDE DISPONIBLE").font(mono(10)).foregroundStyle(.white)
+                        Text(s.walletFormatted)
+                            .font(mono(9))
+                            .foregroundStyle(s.walletBalanceCents > 0 ? .white.opacity(0.55) : .white.opacity(0.35))
+                    }
+                    Spacer()
+                    Button(action: { Task { await chargeWallet() } }) {
+                        HStack(spacing: 6) {
+                            if isChargingWallet { ProgressView().tint(.black).scaleEffect(0.7) }
+                            Text(isChargingWallet ? "RECHARGE..." : "RECHARGER")
+                        }
+                        .font(mono(9))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(isChargingWallet ? Color.white.opacity(0.7) : Color.white)
+                    }
+                    .disabled(isChargingWallet || s.dailyBudgetCents <= 0)
+                }
+
+                Text("RECHARGE BASÉE SUR LE BUDGET JOURNALIER.")
+                    .font(mono(8))
+                    .foregroundStyle(.white.opacity(0.32))
+
+                if let walletMessage {
+                    Text(walletMessage.uppercased())
+                        .font(mono(8))
+                        .foregroundStyle(.white.opacity(0.5))
+                }
+            }
+            .padding(12)
         }
     }
 
@@ -345,7 +503,7 @@ struct RetroAdsSheet: View {
                 HStack(spacing: 8) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(c.name).font(mono(11)).foregroundStyle(.white).lineLimit(1)
-                        Text(c.status.uppercased())
+                        Text(c.adsSignal)
                             .font(mono(8))
                             .foregroundStyle(c.status == "active" ? .white : .white.opacity(0.4))
                             .padding(.horizontal, 5).padding(.vertical, 2)
@@ -377,14 +535,26 @@ struct RetroAdsSheet: View {
                     metricCell("CPC", c.cpcFormatted)
                 }
 
-                // Scale + Split actions (only for active campaigns with some spend)
-                if c.status == "active" && c.spendCents > 0 {
-                    HStack(spacing: 8) {
-                        campaignActionBtn("⬆  SCALE +20%", loading: campaignLoading[c.id] == "scale") {
-                            Task { await scaleCampaign(c) }
+                HStack(spacing: 0) {
+                    metricCell("ROAS", c.purchaseRoasFormatted)
+                    metricCell("REACH", "\(c.reach ?? 0)")
+                    metricCell("FREQ.", String(format: "%.1f", c.frequency ?? 0))
+                    metricCell("VUES", c.videoViewsFormatted)
+                    metricCell("THRU", "\(c.videoThruplaysWatched ?? 0)")
+                }
+
+                if c.status == "active" || c.status == "blocked" || c.status == "paused" {
+                    VStack(spacing: 7) {
+                        HStack(spacing: 8) {
+                            campaignActionBtn("PAUSE LOSERS", loading: campaignLoading[c.id] == "split") {
+                                Task { await splitCampaign(c) }
+                            }
+                            campaignActionBtn("SCALE WINNER", loading: campaignLoading[c.id] == "scale") {
+                                Task { await scaleCampaign(c) }
+                            }
                         }
-                        campaignActionBtn("🏆  APPLIQUER WINNER", loading: campaignLoading[c.id] == "split") {
-                            Task { await splitCampaign(c) }
+                        campaignActionBtn("REFRESH CREA", loading: campaignLoading[c.id] == "refresh") {
+                            Task { await refreshCampaign(c) }
                         }
                     }
                 }
@@ -406,63 +576,69 @@ struct RetroAdsSheet: View {
     }
 
     private func creativeRow(_ creative: AdCreative) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Group {
-                if let mediaUrl = creative.thumbnailUrl ?? creative.videoUrl,
-                   let url = URL(string: mediaUrl) {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .scaledToFill()
-                        default:
-                            thumbnailPlaceholder
+        Button {
+            selectedCreative = creative
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Group {
+                    if let mediaUrl = creative.thumbnailUrl ?? creative.videoUrl,
+                       let url = URL(string: mediaUrl) {
+                        AsyncImage(url: url) { phase in
+                            switch phase {
+                            case .success(let image):
+                                image
+                                    .resizable()
+                                    .scaledToFill()
+                            default:
+                                thumbnailPlaceholder
+                            }
                         }
+                    } else {
+                        thumbnailPlaceholder
                     }
-                } else {
-                    thumbnailPlaceholder
                 }
-            }
-            .frame(width: 52, height: 52)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+                .frame(width: 52, height: 52)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
 
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 8) {
-                    Text(creative.title)
-                        .font(mono(11))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    Text(creative.status.uppercased())
-                        .font(mono(8))
-                        .foregroundStyle(creative.status.lowercased() == "active" ? .white : .white.opacity(0.4))
-                        .padding(.horizontal, 5).padding(.vertical, 2)
-                        .overlay(
-                            Rectangle().stroke(
-                                creative.status.lowercased() == "active" ? Color.white.opacity(0.8) : Color.white.opacity(0.2),
-                                lineWidth: 1
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Text(creative.title)
+                            .font(mono(11))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                        Text(creative.adsSignal)
+                            .font(mono(8))
+                            .foregroundStyle(creative.signalIsPositive ? .white : .white.opacity(0.4))
+                            .padding(.horizontal, 5).padding(.vertical, 2)
+                            .overlay(
+                                Rectangle().stroke(
+                                    creative.signalIsPositive ? Color.white.opacity(0.8) : Color.white.opacity(0.2),
+                                    lineWidth: 1
+                                )
                             )
-                        )
-                    Spacer()
-                }
+                        Spacer()
+                    }
 
-                HStack(spacing: 0) {
-                    metricCell("DÉPENSÉ", creative.spendFormatted)
-                    metricCell("IMPR.", "\(creative.impressions)")
-                    metricCell("CLICKS", "\(creative.clicks)")
-                    metricCell("CTR", creative.ctrFormatted)
-                    metricCell("CPC", creative.cpcFormatted)
-                }
+                    HStack(spacing: 0) {
+                        metricCell("DÉPENSÉ", creative.spendFormatted)
+                        metricCell("IMPR.", "\(creative.impressions)")
+                        metricCell("CLICKS", "\(creative.clicks)")
+                        metricCell("CTR", creative.ctrFormatted)
+                        metricCell("CPC", creative.cpcFormatted)
+                    }
 
-                if !creative.body.isEmpty {
-                    Text(creative.body)
-                        .font(mono(8))
-                        .foregroundStyle(.white.opacity(0.35))
-                        .lineLimit(2)
+                    if !creative.body.isEmpty {
+                        Text(creative.body)
+                            .font(mono(8))
+                            .foregroundStyle(.white.opacity(0.35))
+                            .lineLimit(2)
+                    }
                 }
             }
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 12).padding(.vertical, 10)
+        .buttonStyle(.plain)
     }
 
     private func metricCell(_ label: String, _ value: String) -> some View {
@@ -491,6 +667,14 @@ struct RetroAdsSheet: View {
         .frame(maxWidth: .infinity).padding(.vertical, 40)
     }
 
+    private func errorView(_ message: String) -> some View {
+        VStack(spacing: 10) {
+            Text("ERREUR").font(mono(12)).foregroundStyle(.white)
+            Text(message).font(mono(9)).foregroundStyle(.white.opacity(0.5))
+        }
+        .frame(maxWidth: .infinity).padding(.vertical, 40)
+    }
+
     // MARK: - Data & actions
 
     private func loadData() async {
@@ -515,6 +699,10 @@ struct RetroAdsSheet: View {
             budgetError = "Montant invalide"
             return
         }
+        guard dollars >= 10 else {
+            budgetError = "Minimum $10 / jour"
+            return
+        }
         isSavingBudget = true
         budgetError = nil
         defer { isSavingBudget = false }
@@ -524,6 +712,26 @@ struct RetroAdsSheet: View {
             await loadData()
         } catch {
             budgetError = error.localizedDescription
+        }
+    }
+
+    private func chargeWallet() async {
+        guard let id = companyId else { return }
+        isChargingWallet = true
+        walletMessage = nil
+        defer { isChargingWallet = false }
+        do {
+            let result = try await APIClient.shared.chargeAdsWallet(companyId: id)
+            await loadData()
+            if result.creditedCents > 0 {
+                walletMessage = String(format: "+$%.2f ajouté au wallet", Double(result.creditedCents) / 100)
+            } else if result.skipped == true {
+                walletMessage = result.reason ?? "Recharge non nécessaire"
+            } else {
+                walletMessage = "Recharge terminée"
+            }
+        } catch {
+            walletMessage = error.localizedDescription
         }
     }
 
@@ -569,6 +777,19 @@ struct RetroAdsSheet: View {
             campaignError = error.localizedDescription
         }
     }
+
+    private func refreshCampaign(_ c: AdCampaign) async {
+        guard let id = companyId else { return }
+        campaignLoading[c.id] = "refresh"
+        campaignError = nil
+        defer { campaignLoading.removeValue(forKey: c.id) }
+        do {
+            try await APIClient.shared.refreshAdsCreative(companyId: id, campaignId: c.id)
+            await loadData()
+        } catch {
+            campaignError = error.localizedDescription
+        }
+    }
 }
 
 // MARK: ─────────────────────────────────────────────────────────
@@ -580,31 +801,62 @@ struct RetroWebsiteSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var launchingStep: Int?
+    @State private var launchedMissionId: String?
+    @State private var polledLiveSiteUrl: String?
+    @State private var polledSiteVersion: Int?
     @State private var websiteLogs: [MissionLogEntry] = []
     @State private var logPollingTask: Task<Void, Never>?
     @State private var siteStatusPollingTask: Task<Void, Never>?
 
     private var company: Company? { appState.company }
-    private var siteUrl: String? { company?.siteUrl }
+    private var websiteMissionTypes: Set<String> { ["landing_page", "landing_page_revision"] }
+    private var activeWebsiteMission: Mission? {
+        appState.missions
+            .filter {
+                websiteMissionTypes.contains($0.missionType)
+                && ($0.isRunning || ($0.isPending && $0.source != "ceo_proposal"))
+            }
+            .sorted { ($0.createdAt ?? "") > ($1.createdAt ?? "") }
+            .first
+    }
+    private var pendingWebsiteMission: Mission? {
+        appState.missions
+            .filter { websiteMissionTypes.contains($0.missionType) && $0.isPending && $0.source == "ceo_proposal" }
+            .sorted { ($0.createdAt ?? "") > ($1.createdAt ?? "") }
+            .first
+    }
+    private var latestWebsiteMission: Mission? {
+        appState.missions
+            .filter { websiteMissionTypes.contains($0.missionType) }
+            .sorted { ($0.createdAt ?? "") > ($1.createdAt ?? "") }
+            .first
+    }
+    private var siteIsLive: Bool {
+        (company?.siteStatus == "live" && !(company?.siteUrl ?? "").isEmpty) || polledLiveSiteUrl != nil
+    }
+    private var websiteIsPublishing: Bool {
+        launchingStep != nil || activeWebsiteMission != nil || company?.siteStatus == "publishing" || (websiteStep?.isRunning ?? false)
+    }
+    private var siteUrl: String? {
+        if let url = polledLiveSiteUrl, !url.isEmpty { return url }
+        guard company?.siteStatus == "live" else { return nil }
+        return company?.siteUrl
+    }
     private var slug: String? { company?.slug }
     private var displayUrl: String {
         if let url = siteUrl, !url.isEmpty { return url }
         return "—"
     }
     private var websiteStep: QuestStep? {
-        appState.questChain.first { $0.agentType == "builder" && !$0.isCompleted }
+        appState.visibleQuestChain.first { $0.agentType == "builder" && !$0.isCompleted }
     }
 
     private var siteStatus: (label: String, color: Color) {
+        if websiteIsPublishing { return ("EN COURS ▶", Color.yellow) }
+        if siteIsLive { return ("LIVE ◉", Color.green) }
         switch company?.siteStatus {
-        case "live":       return ("LIVE ◉", Color.green)
-        case "publishing": return ("EN COURS ▶", Color.yellow)
         case "failed":     return ("ERREUR ✕", Color.red)
         default:
-            // Fallback: infer from running quest step
-            if let step = websiteStep, step.isRunning {
-                return ("EN COURS ▶", Color.yellow)
-            }
             return ("PAS ENCORE CRÉÉ ○", Color.white.opacity(0.4))
         }
     }
@@ -634,10 +886,12 @@ struct RetroWebsiteSheet: View {
                     VStack(spacing: 12) {
 
                         // Quest step banner
-                        if let step = websiteStep, step.isActionable {
+                        if websiteIsPublishing {
+                            websiteRunningBanner()
+                        } else if let pending = pendingWebsiteMission {
+                            websitePendingRetryBanner(pending)
+                        } else if let step = websiteStep, step.isActionable {
                             websiteQuestBanner(step)
-                        } else if let step = websiteStep, step.isRunning {
-                            websiteRunningBanner(step)
                         }
 
                         // Polsia URL section
@@ -679,7 +933,7 @@ struct RetroWebsiteSheet: View {
         .overlay(Rectangle().stroke(.white.opacity(0.7), lineWidth: 1))
     }
 
-    private func websiteRunningBanner(_ step: QuestStep) -> some View {
+    private func websiteRunningBanner() -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 ProgressView().tint(.white).scaleEffect(0.75)
@@ -716,11 +970,31 @@ struct RetroWebsiteSheet: View {
         .padding(12)
         .background(Color.black)
         .overlay(Rectangle().stroke(.white.opacity(0.5), lineWidth: 1))
-        .onAppear { startLogPolling(step) }
+        .onAppear { startWebsitePolling() }
         .onDisappear {
             logPollingTask?.cancel()
             siteStatusPollingTask?.cancel()
         }
+    }
+
+    private func websitePendingRetryBanner(_ mission: Mission) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("À RELANCER — WEBSITE")
+                .font(mono(9)).foregroundStyle(.yellow.opacity(0.8))
+            Text(mission.displayTitle.uppercased())
+                .font(mono(12)).foregroundStyle(.white)
+            if let error = latestWebsiteMission?.errorMessage, !error.isEmpty {
+                Text(error.prefix(120))
+                    .font(mono(8)).foregroundStyle(.white.opacity(0.35))
+                    .lineLimit(2)
+            } else {
+                Text("Une relance est dans la file. Lance-la depuis Missions.")
+                    .font(mono(9)).foregroundStyle(.white.opacity(0.45))
+            }
+        }
+        .padding(12)
+        .background(Color.black)
+        .overlay(Rectangle().stroke(.yellow.opacity(0.45), lineWidth: 1))
     }
 
     private struct WebsiteStage {
@@ -738,15 +1012,17 @@ struct RetroWebsiteSheet: View {
         WebsiteStage(key: "deploy",   label: "DÉPLOIEMENT",             matchSteps: ["site_deployed"]),
     ] }
 
-    private func startLogPolling(_ step: QuestStep) {
-        guard let missionId = step.missionId else { return }
+    private func startWebsitePolling() {
+        let missionId = activeWebsiteMission?.id ?? launchedMissionId ?? websiteStep?.missionId ?? latestWebsiteMission?.id
         logPollingTask?.cancel()
-        logPollingTask = Task {
-            while !Task.isCancelled {
-                if let logs = try? await APIClient.shared.fetchMissionLogs(missionId: missionId) {
-                    await MainActor.run { websiteLogs = logs }
+        if let missionId {
+            logPollingTask = Task {
+                while !Task.isCancelled {
+                    if let logs = try? await APIClient.shared.fetchMissionLogs(missionId: missionId) {
+                        await MainActor.run { websiteLogs = logs }
+                    }
+                    try? await Task.sleep(nanoseconds: 3_000_000_000)
                 }
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
             }
         }
         // Also poll site_status so the UI refreshes automatically when the site goes live
@@ -758,14 +1034,23 @@ struct RetroWebsiteSheet: View {
         siteStatusPollingTask?.cancel()
         siteStatusPollingTask = Task {
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
-                guard !Task.isCancelled else { break }
+                await appState.refreshMissionsAndChain()
+                await appState.refreshCompany()
                 if let status = try? await APIClient.shared.fetchSiteStatus(slug: slug) {
                     if status.live {
+                        await MainActor.run {
+                            polledLiveSiteUrl = status.siteUrl
+                            polledSiteVersion = status.version
+                        }
                         await appState.refreshCompany()
                         break
                     }
                 }
+                if appState.company?.siteStatus == "failed" {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard !Task.isCancelled else { break }
             }
         }
     }
@@ -773,11 +1058,11 @@ struct RetroWebsiteSheet: View {
     // MARK: - URL section (shared gateway)
 
     private var urlSection: some View {
-        let version = company?.siteVersion
+        let version = company?.siteVersion ?? polledSiteVersion
         let sectionTitle = "SITE WEB" + (version != nil ? " — v\(version!)" : "")
         return retroSection(sectionTitle) {
             VStack(alignment: .leading, spacing: 10) {
-                if siteUrl != nil {
+                if siteIsLive, siteUrl != nil {
                     HStack(spacing: 10) {
                         Text(displayUrl)
                             .font(mono(11)).foregroundStyle(.white.opacity(0.8))
@@ -801,9 +1086,9 @@ struct RetroWebsiteSheet: View {
                             .overlay(Rectangle().stroke(.white.opacity(0.4), lineWidth: 1))
                     }
                 } else {
-                    Text("Site pas encore créé.")
+                    Text(websiteIsPublishing ? "Publication en cours..." : "Site pas encore créé.")
                         .font(mono(10)).foregroundStyle(.white.opacity(0.4))
-                    Text("Lance la mission 'Créer le site' depuis l'onglet Quêtes.")
+                    Text(websiteIsPublishing ? "L'URL apparaîtra dès que le site répond en live." : "Lance la mission 'Créer le site' depuis l'onglet Quêtes.")
                         .font(mono(9)).foregroundStyle(.white.opacity(0.25))
                 }
             }
@@ -815,13 +1100,38 @@ struct RetroWebsiteSheet: View {
 
     @State private var showProductImageFullscreen = false
 
+    private var imageGenerationEndedWithoutImage: Bool {
+        websiteLogs.contains { ["product_image_missing", "product_image_failed"].contains($0.step) }
+    }
+
+    private var productImageStatusTitle: String {
+        if websiteLogs.contains(where: { $0.step == "product_image_missing" }) {
+            return "IMAGE NON CONFIGURÉE ○"
+        }
+        if websiteLogs.contains(where: { $0.step == "product_image_failed" }) {
+            return "IMAGE ÉCHOUÉE ○"
+        }
+        return "IMAGE NON GÉNÉRÉE ○"
+    }
+
+    private var productImageStatusDetail: String {
+        if websiteLogs.contains(where: { $0.step == "product_image_missing" }) {
+            return "Le générateur d'image n'est pas configuré côté backend."
+        }
+        if websiteLogs.contains(where: { $0.step == "product_image_failed" }) {
+            return "La mission a continué sans image produit."
+        }
+        return siteIsLive
+            ? "Le site est live, mais aucune image produit n'a été attachée."
+            : "L'image apparaîtra si la mission en génère une."
+    }
+
     private var productImageSection: some View {
-        let imageUrl = company?.productImageUrl
-        let websiteIsRunning = websiteStep?.isRunning ?? false
+        let imageUrl = company?.productImageUrl ?? productImageUrlFromLogs
 
         return retroSection("IMAGE PRODUIT") {
             VStack(spacing: 0) {
-                if websiteIsRunning && imageUrl == nil {
+                if websiteIsPublishing && imageUrl == nil && !imageGenerationEndedWithoutImage {
                     // Generating state
                     HStack(spacing: 8) {
                         ProgressView().tint(.white).scaleEffect(0.65)
@@ -874,9 +1184,9 @@ struct RetroWebsiteSheet: View {
                     // Not generated
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("IMAGE NON GÉNÉRÉE ○")
+                            Text(productImageStatusTitle)
                                 .font(mono(10)).foregroundStyle(.white.opacity(0.4))
-                            Text("Le site a quand même été créé. Génère l'image depuis le Sage.")
+                            Text(productImageStatusDetail)
                                 .font(mono(8)).foregroundStyle(.white.opacity(0.25))
                         }
                         Spacer()
@@ -885,6 +1195,24 @@ struct RetroWebsiteSheet: View {
                 }
             }
         }
+    }
+
+    private var productImageUrlFromLogs: String? {
+        websiteLogs
+            .reversed()
+            .first { ["product_image_ready", "product_image_stored"].contains($0.step) }
+            .flatMap { firstURL(in: $0.message) }
+    }
+
+    private func firstURL(in text: String) -> String? {
+        guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else {
+            return nil
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return detector
+            .matches(in: text, options: [], range: range)
+            .compactMap { $0.url?.absoluteString }
+            .first
     }
 
     private func productImageFullscreen(url: URL) -> some View {
@@ -964,7 +1292,11 @@ struct RetroWebsiteSheet: View {
         guard launchingStep == nil else { return }
         launchingStep = step.stepNumber
         Task {
-            await appState.startQuestStep(stepNumber: step.stepNumber)
+            if let mission = await appState.startQuestStep(stepNumber: step.stepNumber) {
+                launchedMissionId = mission.id
+                websiteLogs = []
+                startWebsitePolling()
+            }
             launchingStep = nil
         }
     }
@@ -986,7 +1318,7 @@ struct RetroDocsSheet: View {
     private var allDocs: [Mission] {
         // Landing page HTML is accessible via the Website sheet — don't pollute DOCS
         let base = appState.missions.filter {
-            $0.isCompleted && $0.deliverable != nil && $0.missionType != "landing_page"
+            $0.hasVisibleDeliverable
         }
         if let agent = filterAgent {
             let related = Set(VillageMap.polisiaAgentTypes(for: agent))
@@ -1214,6 +1546,123 @@ struct RetroDocsSheet: View {
     }
 }
 
+private struct AdCreativePreviewSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let creative: AdCreative
+
+    private var videoURL: URL? {
+        creative.videoUrl.flatMap { URL(string: $0) }
+    }
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            retroScanlines
+
+            VStack(spacing: 0) {
+                sheetHeader(icon: "▶", title: "AD PREVIEW", subtitle: creative.status.uppercased(), dismiss: dismiss)
+                    .overlay(alignment: .bottom) { Rectangle().frame(height: 1).foregroundStyle(.white.opacity(0.2)) }
+
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 14) {
+                        videoBlock
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(spacing: 8) {
+                                Text(creative.title)
+                                    .font(mono(15))
+                                    .foregroundStyle(.white)
+                                    .lineLimit(2)
+                                Spacer()
+                                Text(creative.status.uppercased())
+                                    .font(mono(8))
+                                    .foregroundStyle(.white.opacity(0.6))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 3)
+                                    .overlay(Rectangle().stroke(.white.opacity(0.3), lineWidth: 1))
+                            }
+
+                            if !creative.body.isEmpty {
+                                Text(creative.body)
+                                    .font(mono(10))
+                                    .foregroundStyle(.white.opacity(0.45))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                        .padding(12)
+                        .overlay(Rectangle().stroke(.white.opacity(0.25), lineWidth: 1))
+
+                        HStack(spacing: 0) {
+                            previewMetric("DÉPENSÉ", creative.spendFormatted)
+                            previewMetric("IMPR.", "\(creative.impressions)")
+                            previewMetric("CLICKS", "\(creative.clicks)")
+                            previewMetric("CTR", creative.ctrFormatted)
+                            previewMetric("CPC", creative.cpcFormatted)
+                        }
+                        .padding(.vertical, 12)
+                        .overlay(Rectangle().stroke(.white.opacity(0.25), lineWidth: 1))
+                    }
+                    .padding(16)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var videoBlock: some View {
+        if let videoURL {
+            AdVideoPlayer(url: videoURL)
+                .aspectRatio(9.0 / 16.0, contentMode: .fit)
+                .frame(maxWidth: .infinity)
+                .background(Color.white.opacity(0.04))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.25), lineWidth: 1))
+        } else {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.white.opacity(0.04))
+                .aspectRatio(9.0 / 16.0, contentMode: .fit)
+                .overlay(
+                    VStack(spacing: 8) {
+                        Image(systemName: "play.slash.fill")
+                            .font(.system(size: 28))
+                            .foregroundStyle(.white.opacity(0.35))
+                        Text("VIDÉO INDISPONIBLE")
+                            .font(mono(10))
+                            .foregroundStyle(.white.opacity(0.35))
+                    }
+                )
+                .overlay(RoundedRectangle(cornerRadius: 8).stroke(.white.opacity(0.25), lineWidth: 1))
+        }
+    }
+
+    private func previewMetric(_ label: String, _ value: String) -> some View {
+        VStack(spacing: 3) {
+            Text(value).font(mono(12)).foregroundStyle(.white)
+            Text(label).font(mono(7)).foregroundStyle(.white.opacity(0.35))
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+private struct AdVideoPlayer: View {
+    let url: URL
+    @State private var player: AVPlayer?
+
+    var body: some View {
+        VideoPlayer(player: player)
+            .onAppear {
+                guard player == nil else { return }
+                let nextPlayer = AVPlayer(url: url)
+                player = nextPlayer
+                nextPlayer.play()
+            }
+            .onDisappear {
+                player?.pause()
+                player = nil
+            }
+    }
+}
+
 // MARK: ─────────────────────────────────────────────────────────
 // MARK: - RetroBusinessSheet
 // MARK: ─────────────────────────────────────────────────────────
@@ -1235,7 +1684,7 @@ struct RetroBusinessSheet: View {
     private var stripeOk: Bool { stripeStatus == "ready" }
 
     private var businessStep: QuestStep? {
-        appState.questChain.first { $0.agentType == "finance" && !$0.isCompleted }
+        appState.visibleQuestChain.first { $0.agentType == "finance" && !$0.isCompleted }
     }
 
     var body: some View {

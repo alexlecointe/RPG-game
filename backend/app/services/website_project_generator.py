@@ -78,8 +78,13 @@ async def generate_website_project(
     if not settings.openai_api_key and not settings.anthropic_api_key:
         raise RuntimeError("website_engineering_llm_not_configured")
 
-    # For code generation, prefer the agent-coder model when available.
-    provider = "anthropic" if settings.anthropic_api_key else "openai"
+    # For code generation, prefer the agent-coder model when available, but do
+    # not make the pipeline depend on one vendor's billing state.
+    providers: list[str] = []
+    if settings.anthropic_api_key:
+        providers.append("anthropic")
+    if settings.openai_api_key:
+        providers.append("openai")
     system_prompt = _system_prompt()
     user_prompt = _user_prompt(
         company_name=company_name,
@@ -97,37 +102,42 @@ async def generate_website_project(
         quality_feedback=quality_feedback,
     )
 
-    try:
-        from app.agents.llm_client import call_simple
+    from app.agents.llm_client import call_simple
 
-        resp = await call_simple(system_prompt, user_prompt, provider=provider, max_tokens=12000)
-        parsed = _parse_json_object(resp.content)
-        files = _normalize_files(parsed.get("files"))
-        html = str(parsed.get("entry_html") or parsed.get("html") or "").strip()
-        warnings = _validate_project(files, html, meta_pixel_id=meta_pixel_id)
-        if not html or "<html" not in html.lower() or "</html>" not in html.lower():
-            logger.warning("website_project_missing_html", company_name=company_name)
-            raise RuntimeError("website_project_missing_entry_html")
-        if warnings:
-            logger.warning(
-                "website_project_validation_failed",
-                company_name=company_name,
+    last_error: Exception | None = None
+    for provider in providers:
+        try:
+            resp = await call_simple(system_prompt, user_prompt, provider=provider, max_tokens=12000)
+            parsed = _parse_json_object(resp.content)
+            files = _normalize_files(parsed.get("files"))
+            html = str(parsed.get("entry_html") or parsed.get("html") or "").strip()
+            warnings = _validate_project(files, html, meta_pixel_id=meta_pixel_id)
+            if not html or "<html" not in html.lower() or "</html>" not in html.lower():
+                raise RuntimeError("website_project_missing_entry_html")
+            if warnings:
+                raise RuntimeError("website_project_validation_failed:" + ";".join(warnings))
+
+            return WebsiteProject(
+                html=html,
+                files=files,
+                engine="llm_engineering_project",
+                provider=resp.provider,
+                model=resp.model,
+                token_stats=[_token_stats(resp)],
                 warnings=warnings,
             )
-            raise RuntimeError("website_project_validation_failed:" + ";".join(warnings))
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "website_project_provider_failed",
+                provider=provider,
+                error=str(exc)[:220],
+                company_name=company_name,
+            )
+            continue
 
-        return WebsiteProject(
-            html=html,
-            files=files,
-            engine="llm_engineering_project",
-            provider=resp.provider,
-            model=resp.model,
-            token_stats=[_token_stats(resp)],
-            warnings=warnings,
-        )
-    except Exception as exc:
-        logger.warning("website_project_generation_failed", error=str(exc), company_name=company_name)
-        raise
+    logger.warning("website_project_generation_failed", error=str(last_error), company_name=company_name)
+    raise RuntimeError(f"website_project_generation_failed:{str(last_error)[:240]}")
 
 
 def project_manifest(project: WebsiteProject, *, site_spec_json: str) -> dict[str, Any]:

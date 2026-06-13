@@ -31,14 +31,23 @@ async def _company_out(company, wallet) -> CompanyOut:
     if company.slug:
         async with SessionLocal() as _db:
             from sqlalchemy import select as _sel
-            from app.models.entities import Mission, MissionStatus as _MS
+            from app.models.entities import Mission, MissionStatus as _MS, TaskSource as _TS
 
             publishing = await _db.execute(
                 _sel(Mission)
                 .where(
                     Mission.company_id == company.id,
                     Mission.mission_type.in_(WEBSITE_MISSION_TYPES),
-                    Mission.status.in_([_MS.PENDING, _MS.RUNNING]),
+                    (
+                        (Mission.status == _MS.RUNNING)
+                        | (
+                            (Mission.status == _MS.PENDING)
+                            & (
+                                Mission.source.is_(None)
+                                | (Mission.source != _TS.CEO_PROPOSAL)
+                            )
+                        )
+                    ),
                 )
                 .order_by(Mission.created_at.desc())
                 .limit(1)

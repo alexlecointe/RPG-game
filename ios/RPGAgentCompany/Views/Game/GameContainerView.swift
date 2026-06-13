@@ -29,7 +29,7 @@ struct GameContainerView: View {
     // MARK: - Computed
 
     private var company: Company? { appState.company }
-    private var questChain: [QuestStep] { appState.questChain }
+    private var questChain: [QuestStep] { appState.visibleQuestChain }
     private var missions: [Mission] { appState.missions }
 
     private func related(_ agentId: String) -> Set<String> { Set(VillageMap.polisiaAgentTypes(for: agentId)) }
@@ -38,7 +38,7 @@ struct GameContainerView: View {
     private func doneCount(_ agentId: String) -> Int { questChain.filter { related(agentId).contains($0.agentType) && $0.isCompleted }.count }
 
     private var recentDocs: [Mission] {
-        missions.filter { $0.isCompleted && $0.deliverable != nil && $0.missionType != "landing_page" }
+        missions.filter(\.hasVisibleDeliverable)
                .sorted { ($0.createdAt ?? "") > ($1.createdAt ?? "") }
     }
 
@@ -244,15 +244,13 @@ struct GameContainerView: View {
 
     private var businessCard: some View {
         let bld = VillageMap.buildings.first { $0.agentType == "finance" }
-        let s = step("finance")
-        let r = running("finance")
-        let done = doneCount("finance")
-        let stripeOk = company?.stripeConnectStatus == "ready"
+        let stripeStatus = company?.stripeConnectStatus ?? "not_started"
+        let stripeOk = stripeStatus == "ready"
         let adsBudget = company?.adsWalletBalanceCents ?? 0
 
         return RetroPanel(
             icon: "◈", title: "BUSINESS",
-            isActive: s != nil || done > 0,
+            isActive: stripeStatus == "ready" || stripeStatus == "pending",
             blink: blink
         ) {
             VStack(alignment: .leading, spacing: 7) {
@@ -274,16 +272,12 @@ struct GameContainerView: View {
                     }
                 }
                 // Quest step
-                if !r.isEmpty {
-                    panelRunning(r.first?.displayTitle ?? "")
-                } else if let s, s.isRunning {
-                    panelRunning(s.title)
-                } else if let s, s.isAvailable {
-                    panelAvailable(s)
-                } else if s?.isLocked == true || (s == nil && done == 0) {
-                    panelLocked(s?.title)
-                } else {
+                if stripeOk {
                     panelDone
+                } else if stripeStatus == "pending" {
+                    panelRunning("Stripe Connect")
+                } else {
+                    panelLocked("Setup payments")
                 }
             }
         }
@@ -297,36 +291,47 @@ struct GameContainerView: View {
         let s = step("builder")
         let r = running("builder")
         let done = doneCount("builder")
-        let siteUrl = company?.siteUrl
-        let slug = company?.slug
+        let siteStatus = company?.siteStatus ?? "not_created"
+        let siteUrl = siteStatus == "live" ? company?.siteUrl : nil
+        let runningWebsite = r.filter { $0.missionType == "landing_page" || $0.missionType == "landing_page_revision" }
+        let websiteRunning = siteStatus == "publishing"
+            || runningWebsite.contains(where: { $0.isRunning || ($0.isPending && $0.source != "ceo_proposal") })
+            || (s?.isRunning ?? false)
+        let websitePendingRetry = runningWebsite.contains(where: { $0.isPending && $0.source == "ceo_proposal" })
+        let websiteFailed = siteStatus == "failed"
+        let hasLiveSite = siteStatus == "live" && !(siteUrl ?? "").isEmpty
 
         return RetroPanel(
             icon: "◈", title: "WEBSITE",
-            isActive: s != nil || done > 0,
+            isActive: websiteRunning || hasLiveSite || websiteFailed || websitePendingRetry || s != nil || done > 0,
             blink: blink
         ) {
             VStack(alignment: .leading, spacing: 7) {
                 // URL
-                if let url = siteUrl {
+                if let url = siteUrl, !url.isEmpty {
                     Text(url.replacingOccurrences(of: "https://", with: ""))
                         .font(mono(8)).foregroundStyle(.white.opacity(0.7))
                         .lineLimit(1)
                         .onTapGesture { if let u = URL(string: url) { UIApplication.shared.open(u) } }
                 } else {
-                    Text("NON DÉPLOYÉ")
+                    Text(websiteRunning ? "PUBLICATION..." : "NON DÉPLOYÉ")
                         .font(mono(8)).foregroundStyle(.white.opacity(0.25))
                 }
                 // Quest step
-                if !r.isEmpty {
-                    panelRunning(r.first?.displayTitle ?? "")
-                } else if let s, s.isRunning {
-                    panelRunning(s.title)
+                if websiteRunning {
+                    panelRunning(r.first?.displayTitle ?? s?.title ?? "Génération site")
+                } else if hasLiveSite {
+                    panelDone
+                } else if websiteFailed {
+                    panelLocked("Erreur publication")
+                } else if websitePendingRetry {
+                    panelLocked("Retry à lancer")
                 } else if let s, s.isAvailable {
                     panelAvailable(s)
                 } else if s?.isLocked == true || (s == nil && done == 0) {
                     panelLocked(s?.title)
                 } else {
-                    panelDone
+                    panelLocked("Créer le site")
                 }
             }
         }
@@ -384,7 +389,7 @@ struct GameContainerView: View {
         let s = step("orchestrator")
         let r = running("orchestrator")
         let done = doneCount("orchestrator")
-        let hasDocs = missions.contains { related("orchestrator").contains($0.agentType) && $0.isCompleted && $0.deliverable != nil }
+        let hasDocs = missions.contains { related("orchestrator").contains($0.agentType) && $0.hasVisibleDeliverable }
 
         return RetroPanel(
             icon: "◈", title: "RESEARCH",
@@ -540,11 +545,15 @@ struct GameContainerView: View {
 
     // MARK: - Bottom nav   [AI PUNK | MISSIONS | TASKS]
 
+    private var activeMissionCount: Int {
+        missions.filter { $0.isPending || $0.isRunning }.count
+    }
+
     private var bottomNav: some View {
         HStack(spacing: 0) {
             navBtn("◉", "AI PUNK") { showSageChat = true }
             navSep
-            navBtn("◆", "MISSIONS") { showJournal = true }
+            navBtn("◆", "MISSIONS", badgeCount: activeMissionCount) { showJournal = true }
             navSep
             navBtn("◇", "TASKS") { showQuestChain = true }
         }
@@ -553,11 +562,26 @@ struct GameContainerView: View {
         .overlay(alignment: .top) { Rectangle().frame(height: 1).foregroundStyle(.white.opacity(0.2)) }
     }
 
-    private func navBtn(_ icon: String, _ label: String, action: @escaping () -> Void) -> some View {
+    private func navBtn(_ icon: String, _ label: String, badgeCount: Int = 0, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 3) {
-                Text(icon).font(mono(13))
-                Text(label).font(mono(7))
+            ZStack(alignment: .topTrailing) {
+                VStack(spacing: 3) {
+                    Text(icon).font(mono(13))
+                    Text(label).font(mono(7))
+                }
+                .frame(maxWidth: .infinity)
+
+                if badgeCount > 0 {
+                    Text("\(badgeCount)")
+                        .font(mono(7))
+                        .foregroundStyle(.black)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(PixelTheme.accentGreen)
+                        .clipShape(Capsule())
+                        .padding(.trailing, 18)
+                        .padding(.top, 3)
+                }
             }
             .foregroundStyle(.white.opacity(0.55)).frame(maxWidth: .infinity)
         }
@@ -646,7 +670,7 @@ struct GameContainerView: View {
                                  tileX: 0, tileY: 0, dialogue: "", agentType: bld.agentType)
         let rel = related(bld.agentType)
         let hasRunning = missions.contains { rel.contains($0.agentType) && ($0.isRunning || $0.isPending) }
-        let hasDone = missions.contains { rel.contains($0.agentType) && $0.isCompleted && $0.deliverable != nil }
+        let hasDone = missions.contains { rel.contains($0.agentType) && $0.hasVisibleDeliverable }
         let visitedKey = "visited_\(npc.id)"
         let isFirst = !UserDefaults.standard.bool(forKey: visitedKey)
         UserDefaults.standard.set(true, forKey: visitedKey)
