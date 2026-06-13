@@ -902,7 +902,6 @@ async def _pregenerate_product_image(
     Returns the image URL or empty string on failure.
     """
     import re as _re
-    from app.agents.tools.generate_image import _execute_generate_image
     from app.core.config import get_settings
 
     settings = get_settings()
@@ -960,11 +959,24 @@ async def _pregenerate_product_image(
     try:
         if log_step:
             await log_step("product_image_generating", f"Génération image produit : {image_prompt[:80]}...")
-        result_json = await _execute_generate_image(
+        quality = (settings.website_image_quality or "premium").lower().strip()
+        preferred_model = (
+            settings.replicate_image_model_premium
+            if quality == "premium" and business_type == "ecommerce"
+            else settings.replicate_image_model_standard
+        )
+        fallback_model = settings.replicate_image_model_standard
+        if log_step:
+            await log_step(
+                "product_image_model",
+                f"Mode image {quality} — modèle {preferred_model}",
+            )
+        result_json = await _generate_product_image_with_fallback(
             settings.replicate_api_token,
             image_prompt,
-            width=1024,
-            height=1024,
+            preferred_model=preferred_model,
+            fallback_model=fallback_model,
+            log_step=log_step,
         )
         import json as _json
         result = _json.loads(result_json)
@@ -977,6 +989,47 @@ async def _pregenerate_product_image(
     except Exception as exc:
         logger.warning("product_image_pregeneration_failed", company_id=company_id, error=str(exc))
         return ""
+
+
+async def _generate_product_image_with_fallback(
+    api_token: str,
+    image_prompt: str,
+    *,
+    preferred_model: str,
+    fallback_model: str,
+    log_step=None,
+) -> str:
+    from app.agents.tools.generate_image import _execute_generate_image
+
+    try:
+        return await _execute_generate_image(
+            api_token,
+            image_prompt,
+            width=1024,
+            height=1024,
+            model_slug=preferred_model,
+        )
+    except Exception as exc:
+        if preferred_model == fallback_model:
+            raise
+        logger.warning(
+            "premium_product_image_failed_falling_back",
+            preferred_model=preferred_model,
+            fallback_model=fallback_model,
+            error=str(exc),
+        )
+        if log_step:
+            await log_step(
+                "product_image_model_fallback",
+                f"Modèle premium indisponible — fallback {fallback_model}",
+            )
+        return await _execute_generate_image(
+            api_token,
+            image_prompt,
+            width=1024,
+            height=1024,
+            model_slug=fallback_model,
+        )
 
 
 def _validate_landing_html(html: str, product_image_url: str = "", business_type: str = "ecommerce") -> list[str]:

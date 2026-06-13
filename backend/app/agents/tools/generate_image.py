@@ -1,6 +1,6 @@
 """Tool: generate_image — AI image generation via Replicate API.
 
-Uses the flux-schnell model for fast, high-quality image generation.
+Uses FLUX models for fast or premium image generation.
 Returns a URL to the generated image.
 """
 from __future__ import annotations
@@ -35,7 +35,7 @@ GENERATE_IMAGE_SCHEMA = {
     "required": ["prompt"],
 }
 
-REPLICATE_API = "https://api.replicate.com/v1/models/black-forest-labs/flux-schnell/predictions"
+DEFAULT_REPLICATE_IMAGE_MODEL = "black-forest-labs/flux-schnell"
 
 
 async def _execute_generate_image(
@@ -43,17 +43,20 @@ async def _execute_generate_image(
     prompt: str,
     width: int = 1024,
     height: int = 1024,
+    model_slug: str = DEFAULT_REPLICATE_IMAGE_MODEL,
 ) -> str:
     width = max(256, min(width, 1440))
     height = max(256, min(height, 1440))
+    model_slug = (model_slug or DEFAULT_REPLICATE_IMAGE_MODEL).strip().strip("/")
 
     input_params: dict = {
         "prompt": prompt,
-        "go_fast": True,
-        "num_outputs": 1,
         "output_format": "webp",
-        "output_quality": 80,
     }
+    if model_slug.endswith("flux-schnell"):
+        input_params["num_outputs"] = 1
+        input_params["output_quality"] = 80
+        input_params["go_fast"] = True
 
     if width == height and width == 1024:
         input_params["aspect_ratio"] = "1:1"
@@ -66,9 +69,10 @@ async def _execute_generate_image(
         input_params["width"] = width
         input_params["height"] = height
 
+    replicate_api = f"https://api.replicate.com/v1/models/{model_slug}/predictions"
     async with httpx.AsyncClient(timeout=120) as client:
         create_resp = await client.post(
-            REPLICATE_API,
+            replicate_api,
             headers={
                 "Authorization": f"Bearer {api_token}",
                 "Content-Type": "application/json",
@@ -92,6 +96,7 @@ async def _execute_generate_image(
         "image_url": image_url,
         "prompt": prompt[:200],
         "dimensions": f"{width}x{height}",
+        "model": model_slug,
     })
 
 
@@ -212,7 +217,7 @@ def create_generate_image_tool(api_token: str, company_id: str = "") -> ToolDefi
     return ToolDefinition(
         name="generate_image",
         description=(
-            "Generate an AI image from a text description using Replicate (flux-schnell). "
+            "Generate an AI image from a text description using Replicate (FLUX). "
             "Use this to create product photos, ad creatives, logos, hero images, etc. "
             "Returns the URL of the generated image. "
             "Cost: 1 credit per image generated."

@@ -36,6 +36,9 @@ class Settings(BaseSettings):
 
     # New tool integrations
     replicate_api_token: str = ""
+    replicate_image_model_standard: str = "black-forest-labs/flux-schnell"
+    replicate_image_model_premium: str = "black-forest-labs/flux-1.1-pro"
+    website_image_quality: str = "premium"  # standard | premium
     resend_api_key: str = ""
     resend_from_domain: str = "resend.dev"
     browserbase_api_key: str = ""

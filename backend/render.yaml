@@ -62,6 +62,12 @@ services:
         value: "false"
       - key: REPLICATE_API_TOKEN
         sync: false
+      - key: REPLICATE_IMAGE_MODEL_STANDARD
+        value: black-forest-labs/flux-schnell
+      - key: REPLICATE_IMAGE_MODEL_PREMIUM
+        value: black-forest-labs/flux-1.1-pro
+      - key: WEBSITE_IMAGE_QUALITY
+        value: premium
       - key: META_PIXEL_ID
         sync: false
       - key: META_CAPI_TOKEN
@@ -128,6 +134,12 @@ services:
         sync: false
       - key: REPLICATE_API_TOKEN
         sync: false
+      - key: REPLICATE_IMAGE_MODEL_STANDARD
+        value: black-forest-labs/flux-schnell
+      - key: REPLICATE_IMAGE_MODEL_PREMIUM
+        value: black-forest-labs/flux-1.1-pro
+      - key: WEBSITE_IMAGE_QUALITY
+        value: premium
       - key: META_PIXEL_ID
         sync: false
       - key: META_CAPI_TOKEN
