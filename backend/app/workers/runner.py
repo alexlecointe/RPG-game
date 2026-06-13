@@ -737,19 +737,27 @@ async def _store_product_image_asset(db, company_id: str, image_url: str, missio
     """Persist product image as a CompanyAsset so it appears in Documents/gallery."""
     try:
         from app.models.entities import CompanyAsset
+        filename = _product_image_filename(image_url)
+        storage_key = f"{company_id}/product_image/{filename}"
         existing = await db.execute(
             __import__("sqlalchemy", fromlist=["select"]).select(CompanyAsset).where(
                 CompanyAsset.company_id == company_id,
                 CompanyAsset.asset_type == "product_image",
             )
         )
-        if existing.scalars().first():
-            return  # already stored
+        current = existing.scalars().first()
+        if current:
+            current.public_url = image_url
+            current.storage_key = storage_key
+            current.filename = filename
+            await db.commit()
+            logger.info("product_image_asset_updated", company_id=company_id, url=image_url[:60])
+            return
         asset = CompanyAsset(
             company_id=company_id,
-            filename="product_image.webp",
+            filename=filename,
             asset_type="product_image",
-            storage_key=f"{company_id}/product_image/product_image.webp",
+            storage_key=storage_key,
             public_url=image_url,
             size_bytes=0,
         )
@@ -758,6 +766,64 @@ async def _store_product_image_asset(db, company_id: str, image_url: str, missio
         logger.info("product_image_asset_stored", company_id=company_id, url=image_url[:60])
     except Exception as exc:
         logger.warning("product_image_asset_store_failed", company_id=company_id, error=str(exc))
+
+
+def _product_image_filename(image_url: str) -> str:
+    lower = (image_url or "").lower().split("?", 1)[0]
+    if lower.endswith(".png"):
+        return "product_image.png"
+    if lower.endswith(".jpg") or lower.endswith(".jpeg"):
+        return "product_image.jpg"
+    return "product_image.webp"
+
+
+async def _mirror_product_image_to_r2(company_id: str, image_url: str, log_step=None) -> str:
+    """Copy a generated product image to our R2 public bucket when configured.
+
+    Replicate URLs are useful immediately but not ideal as long-lived product
+    assets. R2 gives us a stable URL for the site, ads, and document gallery.
+    """
+    if not image_url:
+        return ""
+
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    if not settings.r2_configured:
+        return image_url
+
+    try:
+        import httpx
+        from app.services.r2_storage import upload_bytes
+
+        async with httpx.AsyncClient(timeout=60, follow_redirects=True) as client:
+            resp = await client.get(image_url)
+            resp.raise_for_status()
+            content = resp.content
+
+        if not content:
+            return image_url
+
+        content_type = resp.headers.get("content-type", "image/webp").split(";")[0].strip()
+        extension = {
+            "image/png": "png",
+            "image/jpeg": "jpg",
+            "image/jpg": "jpg",
+            "image/webp": "webp",
+        }.get(content_type, "webp")
+        storage_key = f"{company_id}/product_image/product_image.{extension}"
+        public_url = upload_bytes(storage_key, content, content_type or "image/webp")
+        if log_step:
+            await log_step("product_image_stored", f"Image produit stockée R2 : {public_url[:60]}...")
+        return public_url
+    except Exception as exc:
+        logger.warning("product_image_r2_mirror_failed", company_id=company_id, error=str(exc))
+        if log_step:
+            await log_step(
+                "product_image_storage_fallback",
+                "Image produit générée, stockage R2 indisponible — URL provider conservée.",
+            )
+        return image_url
 
 
 async def _wait_for_infra(company, log_step, max_wait: int = 90) -> bool:
@@ -903,8 +969,10 @@ async def _pregenerate_product_image(
         import json as _json
         result = _json.loads(result_json)
         url = result.get("image_url", "")
+        if url:
+            url = await _mirror_product_image_to_r2(company_id, url, log_step)
         if url and log_step:
-            await log_step("product_image_ready", f"Image produit générée : {url[:60]}...")
+            await log_step("product_image_ready", f"Image produit prête : {url[:60]}...")
         return url
     except Exception as exc:
         logger.warning("product_image_pregeneration_failed", company_id=company_id, error=str(exc))
