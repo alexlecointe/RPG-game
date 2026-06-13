@@ -401,15 +401,18 @@ async def _run_mission_inner(mission_id: str) -> None:
                 try:
                     if mission.mission_type in WEBSITE_MISSION_TYPES:
                         from app.core.config import get_settings as _settings_for_render
-                        from app.services.website_renderer import render_modular_site
+                        from app.services.website_project_generator import generate_website_project
 
                         if log_step:
                             await log_step(
-                                "website_components",
-                                "Assemblage du site depuis company_profile, theme et composants",
+                                "website_engineering",
+                                "Agent engineering — génération d'un mini-projet website structuré",
                             )
-                        rendered_html = render_modular_site(
+                        website_project = await generate_website_project(
                             company_name=company.name,
+                            mission_statement=company.mission_statement,
+                            product_description=company.product_description or "",
+                            target_audience=company.target_audience or "",
                             business_type=company.business_type.value,
                             company_profile_json=website_profile,
                             site_spec_json=website_strategy,
@@ -417,14 +420,20 @@ async def _run_mission_inner(mission_id: str) -> None:
                             checkout_url=stripe_checkout_url,
                             meta_pixel_id=_settings_for_render().meta_pixel_id,
                             revision_request=revision_request,
+                            existing_site_html=existing_site_html,
+                            quality_feedback=feedback_addendum or "",
                         )
+                        if log_step:
+                            await log_step(
+                                "website_project_ready",
+                                f"Projet website prêt — {len(website_project.files)} fichiers, moteur {website_project.engine}",
+                            )
                         agent_result = AgentResult(
                             format="html",
-                            content=rendered_html,
-                            metadata={
-                                "renderer": "modular_components",
-                                "uses_company_profile": bool(website_profile),
-                            },
+                            content=website_project.html,
+                            metadata=website_project.metadata
+                            | {"uses_company_profile": bool(website_profile)},
+                            token_stats=website_project.token_stats,
                         )
                     else:
                         agent_result = await asyncio.wait_for(
@@ -621,6 +630,22 @@ async def _run_mission_inner(mission_id: str) -> None:
                     if log_step:
                         await log_step("site_deployed", f"Site déjà publié par l'agent (v{artifact.version})")
                 else:
+                    site_spec_to_store = website_strategy or None
+                    if site_spec_to_store and agent_result.metadata.get("renderer"):
+                        try:
+                            import json as _json
+                            _spec_payload = _json.loads(site_spec_to_store)
+                            if isinstance(_spec_payload, dict):
+                                _spec_payload["_website_engineering"] = {
+                                    "engine": agent_result.metadata.get("renderer"),
+                                    "provider": agent_result.metadata.get("provider"),
+                                    "model": agent_result.metadata.get("model"),
+                                    "project_files": agent_result.metadata.get("project_files", []),
+                                    "warnings": agent_result.metadata.get("warnings", []),
+                                }
+                                site_spec_to_store = _json.dumps(_spec_payload, ensure_ascii=False, indent=2)
+                        except Exception:
+                            site_spec_to_store = website_strategy or None
                     artifact = await publish_site(
                         db,
                         company_id=company.id,
@@ -628,7 +653,7 @@ async def _run_mission_inner(mission_id: str) -> None:
                         html_content=agent_result.content,
                         mission_id=mission.id,
                         quality_score=float(best_score) if best_score else None,
-                        site_spec_json=website_strategy or None,
+                        site_spec_json=site_spec_to_store,
                     )
                     live_artifact = await get_live_artifact(db, slug)
                     if not live_artifact:
