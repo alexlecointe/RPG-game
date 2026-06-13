@@ -5,6 +5,7 @@ import asyncio
 import structlog
 
 from app.agents.scorer import QUALITY_THRESHOLD, MAX_QUALITY_RETRIES, score_deliverable
+from app.agents.base import AgentResult
 from app.core.database import SessionLocal
 from app.models.entities import Mission, MissionLog, MissionStatus, NotificationType, TokenUsage
 
@@ -398,31 +399,59 @@ async def _run_mission_inner(mission_id: str) -> None:
 
             while quality_retry <= MAX_QUALITY_RETRIES:
                 try:
-                    agent_result = await asyncio.wait_for(
-                        execute_agent(
-                            mission.agent_type,
-                            mission.mission_type,
-                            company.name,
-                            company.mission_statement,
-                            product_description=company.product_description,
-                            target_audience=company.target_audience,
-                            log_callback=log_step,
-                            chain_context=chain_context,
+                    if mission.mission_type in WEBSITE_MISSION_TYPES:
+                        from app.core.config import get_settings as _settings_for_render
+                        from app.services.website_renderer import render_modular_site
+
+                        if log_step:
+                            await log_step(
+                                "website_components",
+                                "Assemblage du site depuis company_profile, theme et composants",
+                            )
+                        rendered_html = render_modular_site(
+                            company_name=company.name,
                             business_type=company.business_type.value,
-                            memory_context=memory_context,
-                            quality_feedback=feedback_addendum or None,
-                            company_id=company.id,
-                            company_slug=company.slug or "default",
-                            competitor_url=company.competitor_url or "",
-                            website_profile=website_profile,
-                            website_brief=website_brief,
-                            website_strategy=website_strategy,
+                            company_profile_json=website_profile,
+                            site_spec_json=website_strategy,
                             product_image_url=product_image_url,
-                            existing_site_html=existing_site_html,
+                            checkout_url=stripe_checkout_url,
+                            meta_pixel_id=_settings_for_render().meta_pixel_id,
                             revision_request=revision_request,
-                        ),
-                        timeout=120 if mission.mission_type == "market_scan" else 900,
-                    )
+                        )
+                        agent_result = AgentResult(
+                            format="html",
+                            content=rendered_html,
+                            metadata={
+                                "renderer": "modular_components",
+                                "uses_company_profile": bool(website_profile),
+                            },
+                        )
+                    else:
+                        agent_result = await asyncio.wait_for(
+                            execute_agent(
+                                mission.agent_type,
+                                mission.mission_type,
+                                company.name,
+                                company.mission_statement,
+                                product_description=company.product_description,
+                                target_audience=company.target_audience,
+                                log_callback=log_step,
+                                chain_context=chain_context,
+                                business_type=company.business_type.value,
+                                memory_context=memory_context,
+                                quality_feedback=feedback_addendum or None,
+                                company_id=company.id,
+                                company_slug=company.slug or "default",
+                                competitor_url=company.competitor_url or "",
+                                website_profile=website_profile,
+                                website_brief=website_brief,
+                                website_strategy=website_strategy,
+                                product_image_url=product_image_url,
+                                existing_site_html=existing_site_html,
+                                revision_request=revision_request,
+                            ),
+                            timeout=120 if mission.mission_type == "market_scan" else 900,
+                        )
                 except asyncio.TimeoutError as exc:
                     if log_step:
                         await log_step(
@@ -908,8 +937,10 @@ def _validate_landing_html(html: str, product_image_url: str = "", business_type
     # Image produit
     if product_image_url and product_image_url not in html:
         issues.append(f"Image produit pré-générée non intégrée ({product_image_url[:50]}...)")
-    elif "<img" not in h:
-        issues.append("Aucune image dans le HTML — section visuelle manquante")
+    elif "<img" not in h and not any(
+        visual in h for visual in ["product-render", "dashboard", "phone-screen", "visual-wrap"]
+    ):
+        issues.append("Aucun visuel produit/UI dans le HTML — section visuelle manquante")
 
     # Sections obligatoires
     import re as _re
