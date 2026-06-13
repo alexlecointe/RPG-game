@@ -660,14 +660,15 @@ def build_product_image_prompt(
     style = (visual_style or "premium studio product photography").strip()
 
     if business_type == "ecommerce":
+        packaging = infer_product_packaging(product)
         return (
-            f"Premium studio packshot of the actual product: {product}. "
+            f"A premium skincare-quality product photo: {packaging} for {product}. "
             f"Brand name on packaging: {company_name}. "
-            "Show only the packaged product as a clean commercial product photo, "
-            "for example a tube, jar, bottle, box, or applicator depending on the product. "
+            "Show only the packaged product as a clean commercial packshot, "
+            "centered hero composition, label facing camera, premium ecommerce campaign image. "
             f"Visual style: {style}. "
-            "Soft natural light, clean premium background, realistic ecommerce hero image, "
-            "sharp focus, no clutter. "
+            "Soft natural light, cream and warm neutral background, subtle shadow, "
+            "high-end DTC brand aesthetic, sharp focus, realistic materials, no clutter. "
             f"Intended audience context: {audience}, but do not show people. "
             "STRICT NEGATIVE: no humans, no faces, no athletes, no cyclist, no bicycle, "
             "no selfie, no mirror photo, no before-after transformation, no stock photo, "
@@ -692,6 +693,25 @@ def build_product_image_prompt(
         f"Premium brand visual for {company_name}: {product}. "
         f"Visual style: {style}. Clean professional composition, no unrelated stock photo."
     )
+
+
+def infer_product_packaging(product_description: str) -> str:
+    text = (product_description or "").lower()
+    if any(word in text for word in ["creme", "crème", "cream", "gel", "baume", "lotion"]):
+        return "a 50ml matte aluminum tube with a white body and refined minimal label"
+    if any(word in text for word in ["serum", "sérum", "oil", "huile"]):
+        return "a 30ml glass dropper bottle with a refined minimal label"
+    if any(word in text for word in ["supplement", "vitamine", "capsule", "gummies"]):
+        return "a premium supplement bottle with a clean minimal label"
+    if any(word in text for word in ["boisson", "drink", "soda", "cafe", "café", "the", "thé"]):
+        return "a premium beverage bottle or can with a clean branded label"
+    if any(word in text for word in ["snack", "barre", "chips", "food", "sauce"]):
+        return "a premium packaged food pouch or box with a clean branded label"
+    if any(word in text for word in ["vetement", "vêtement", "shirt", "hoodie", "bijou", "accessoire"]):
+        return "a premium flat-lay product arrangement on a clean editorial surface"
+    if any(word in text for word in ["device", "gadget", "tech", "outil", "electronique", "électronique"]):
+        return "a sleek physical device packshot with product box and clean reflections"
+    return "a premium physical product package with a clean minimal label"
 
 
 def _parse_json_object(value: str) -> dict[str, Any]:
