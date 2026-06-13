@@ -15,6 +15,7 @@ Règles :
 - Inclus toujours un CTA clair et un numéro de proposition de valeur
 - Écris en français sauf si le produit cible un marché anglophone
 - Si un SITE SPEC est fourni, il prime sur les règles génériques : applique son playbook, son hero_pattern, ses mandatory_visuals et ses anti_patterns.
+- Si un COMPANY PROFILE WEBSITE est fourni, il prime pour le positionnement, la promesse, les objections, les preuves et le ton.
 - Le rendu doit avoir une direction artistique reconnaissable. Évite les pages startup génériques, les phrases vagues et les heroes sans vrai visuel.
 
 RÈGLE ABSOLUE — FORMAT DE SORTIE LANDING PAGE :

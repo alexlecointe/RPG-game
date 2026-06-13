@@ -219,6 +219,7 @@ async def _run_mission_inner(mission_id: str) -> None:
             best_score = 0
 
             # For website missions: infra check, strategy, product image, revision context.
+            website_profile = ""
             website_brief = ""
             website_strategy = ""
             product_image_url = ""
@@ -237,6 +238,7 @@ async def _run_mission_inner(mission_id: str) -> None:
                         )
 
                 previous_site_spec = ""
+                previous_company_profile = ""
                 if mission.mission_type == "landing_page_revision":
                     from app.models.entities import SiteArtifact as _SiteArtifact
 
@@ -250,6 +252,15 @@ async def _run_mission_inner(mission_id: str) -> None:
                     if latest_site:
                         existing_site_html = latest_site.html_content or ""
                         previous_site_spec = latest_site.site_spec_json or ""
+                        try:
+                            import json as _json
+                            _prev_spec = _json.loads(previous_site_spec) if previous_site_spec else {}
+                            previous_company_profile = _json.dumps(
+                                _prev_spec.get("company_profile", {}),
+                                ensure_ascii=False,
+                            )
+                        except Exception:
+                            previous_company_profile = ""
                     revision_request = (
                         (mission.description or "").strip()
                         or (mission.title or "").strip()
@@ -258,11 +269,11 @@ async def _run_mission_inner(mission_id: str) -> None:
                     if log_step:
                         await log_step("revision_context", "Site existant chargé pour révision")
 
-                # --- 2. Brief créatif + site spec ---
+                # --- 2. Company profile + creative brief + site spec ---
                 if log_step:
                     await log_step(
                         "website_strategy",
-                        "Analyse du business et choix du playbook website...",
+                        "Analyse du business, profil de marque et choix du playbook website...",
                     )
                 market_scan_deliverable = ""
                 stripe_checkout_url = ""
@@ -270,13 +281,24 @@ async def _run_mission_inner(mission_id: str) -> None:
                     import re as _re
                     for ctx in chain_context:
                         if ctx.get("mission_type") == "market_scan":
-                            market_scan_deliverable = ctx.get("deliverable", "")[:1200]
+                            market_scan_deliverable = ctx.get("deliverable", "")[:5000]
                         if ctx.get("mission_type") == "payment_setup":
                             _ps = ctx.get("deliverable", "")
                             _m = _re.search(r"https://buy\.stripe\.com/[^\s\"'>\)]+", _ps)
                             if _m:
                                 stripe_checkout_url = _m.group(0)
-                from app.services.website_strategy import generate_site_spec
+                from app.services.website_strategy import generate_company_profile, generate_site_spec
+
+                website_profile = await generate_company_profile(
+                    company_name=company.name,
+                    mission_statement=company.mission_statement,
+                    product_description=company.product_description or "",
+                    target_audience=company.target_audience or "",
+                    business_type=company.business_type.value,
+                    market_scan=market_scan_deliverable,
+                    revision_request=revision_request,
+                    previous_profile_json=previous_company_profile,
+                )
 
                 website_strategy = await generate_site_spec(
                     company_name=company.name,
@@ -288,6 +310,7 @@ async def _run_mission_inner(mission_id: str) -> None:
                     stripe_checkout_url=stripe_checkout_url,
                     revision_request=revision_request,
                     previous_spec_json=previous_site_spec,
+                    company_profile_json=website_profile,
                 )
                 website_brief = await _generate_website_brief(
                     company_name=company.name,
@@ -299,7 +322,18 @@ async def _run_mission_inner(mission_id: str) -> None:
                     stripe_checkout_url=stripe_checkout_url,
                 )
 
-                # --- 6. Stocker le brief comme memory ---
+                # --- 6. Stocker le profil et le brief comme memory ---
+                if website_profile:
+                    from app.services.memory import MemoryService as _MS
+                    _mem = _MS(db)
+                    await _mem.store(
+                        company.id, "brand", "company_profile", website_profile, mission.id
+                    )
+                    if log_step:
+                        await log_step(
+                            "website_profile_ready",
+                            "Company profile prêt — positionnement, cible, USP et objections",
+                        )
                 if website_brief:
                     from app.services.memory import MemoryService as _MS
                     _mem = _MS(db)
@@ -380,6 +414,7 @@ async def _run_mission_inner(mission_id: str) -> None:
                             company_id=company.id,
                             company_slug=company.slug or "default",
                             competitor_url=company.competitor_url or "",
+                            website_profile=website_profile,
                             website_brief=website_brief,
                             website_strategy=website_strategy,
                             product_image_url=product_image_url,
@@ -435,6 +470,7 @@ async def _run_mission_inner(mission_id: str) -> None:
                     )
                     visual_issues = _validate_visual_quality(
                         agent_result.content,
+                        website_profile=website_profile,
                         website_strategy=website_strategy,
                         product_image_url=product_image_url,
                         business_type=company.business_type.value,
@@ -903,6 +939,7 @@ def _validate_landing_html(html: str, product_image_url: str = "", business_type
 def _validate_visual_quality(
     html: str,
     *,
+    website_profile: str = "",
     website_strategy: str = "",
     product_image_url: str = "",
     business_type: str = "ecommerce",
@@ -922,10 +959,26 @@ def _validate_visual_quality(
             spec = _json.loads(website_strategy)
         except Exception:
             spec = {}
+    profile: dict = {}
+    if website_profile:
+        try:
+            profile = _json.loads(website_profile)
+        except Exception:
+            profile = {}
 
     playbook_key = str(spec.get("playbook_key", ""))
     required_visuals = [str(v).lower() for v in spec.get("mandatory_visuals", [])]
     anti_patterns = [str(v).lower() for v in spec.get("anti_patterns", [])]
+    product_words = _important_profile_words(str(profile.get("product", "")))
+    customer_words = _important_profile_words(str(profile.get("core_customer", "")))
+    hero_words = _important_profile_words(str(profile.get("hero_claim", "")))
+
+    if product_words and not any(word in h for word in product_words[:4]):
+        issues.append("Company profile ignoré — le produit concret n'est pas assez visible dans le copy")
+    if customer_words and not any(word in h for word in customer_words[:4]):
+        issues.append("Company profile ignoré — la cible spécifique n'est pas assez visible")
+    if hero_words and not any(word in h[:2500] for word in hero_words[:5]):
+        issues.append("Hero trop détaché du company profile — reformuler depuis le hero_claim")
 
     first_screen = h[:3500]
     if not any(tag in first_screen for tag in ["<img", "mockup", "iphone", "dashboard", "product"]):
@@ -984,6 +1037,22 @@ def _validate_visual_quality(
             break
 
     return issues
+
+
+def _important_profile_words(text: str) -> list[str]:
+    import re as _re
+
+    stopwords = {
+        "avec", "pour", "dans", "from", "that", "this", "your", "vous", "nous",
+        "leur", "leurs", "the", "and", "une", "des", "les", "aux", "sur",
+        "qui", "que", "plus", "sans", "etre", "être", "get", "better",
+    }
+    words = [
+        w.lower()
+        for w in _re.split(r"[^a-zA-Z0-9à-ÿ]+", text)
+        if len(w) >= 4
+    ]
+    return [w for w in words if w not in stopwords][:8]
 
 
 async def _generate_website_brief(

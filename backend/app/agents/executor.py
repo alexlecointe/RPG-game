@@ -210,6 +210,7 @@ def _build_user_prompt(
     chain_context: list[dict] | None = None,
     memory_context: list[dict] | None = None,
     competitor_url: str = "",
+    website_profile: str = "",
     website_brief: str = "",
     website_strategy: str = "",
     product_image_url: str = "",
@@ -224,6 +225,16 @@ def _build_user_prompt(
         f"Audience cible: {target_audience}" if target_audience else "",
         f"URL concurrent a analyser: {competitor_url}" if competitor_url else "",
     ]
+
+    if website_profile:
+        parts.append(
+            "\n--- COMPANY PROFILE WEBSITE (SOURCE PRINCIPALE) ---\n"
+            f"{website_profile}\n"
+            "--- FIN COMPANY PROFILE ---\n"
+            "Utilise ce company profile comme source principale pour le positionnement, "
+            "le hero, le copy, les objections, les preuves et le ton. "
+            "Ne le remplace pas par un template générique."
+        )
 
     if website_brief:
         parts.append(f"\n--- BRIEF CREATIF WEBSITE ---\n{website_brief}\n--- FIN BRIEF ---")
@@ -330,6 +341,7 @@ async def execute_agent(
     company_id: str = "",
     company_slug: str = "default",
     competitor_url: str = "",
+    website_profile: str = "",
     website_brief: str = "",
     website_strategy: str = "",
     product_image_url: str = "",
@@ -370,6 +382,7 @@ async def execute_agent(
         chain_context=chain_context,
         memory_context=memory_context,
         competitor_url=competitor_url,
+        website_profile=website_profile,
         website_brief=website_brief,
         website_strategy=website_strategy,
         product_image_url=product_image_url,

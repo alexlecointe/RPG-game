@@ -74,6 +74,15 @@ Si un "SITE SPEC / WEBSITE STRATEGY" est present dans le contexte :
 - Le hero doit montrer le produit, l'interface ou le resultat final des le premier ecran.
 - La page doit sembler creee pour cette marque precise, pas pour n'importe quelle startup.
 
+## Utilisation du COMPANY PROFILE
+Si un "COMPANY PROFILE WEBSITE" est present dans le contexte :
+- C'est la source principale du positionnement et du copy.
+- Le hero doit reprendre le hero_claim ou le reformuler sans le rendre generique.
+- Les sections doivent repondre aux pain_points, objections, alternatives_to_beat et desired_outcome.
+- Le ton doit suivre voice.
+- N'invente pas de preuves fortes qui ne sont pas dans proof_points.
+- Si une information est dans unknowns, ne la presente pas comme un fait.
+
 ## Image produit
 - Si "IMAGE PRODUIT PRÉ-GÉNÉRÉE" est presente dans le contexte : utilise cette URL en <img> dans le hero ET product showcase.
 - Si aucune image n'est disponible : utilise un placeholder CSS elegant (gradient + emoji adapte au produit).

@@ -353,6 +353,7 @@ def fallback_site_spec(
     stripe_checkout_url: str = "",
     revision_request: str = "",
     previous_spec_json: str = "",
+    company_profile_json: str = "",
 ) -> dict[str, Any]:
     text = " ".join([
         company_name, mission_statement, product_description, target_audience, revision_request,
@@ -396,9 +397,129 @@ def fallback_site_spec(
             "résultat concret après usage",
             "preuve ou réduction de risque",
         ],
+        "company_profile": _parse_json_object(company_profile_json),
         "revision_request": revision_request,
         "previous_spec_available": bool(previous_spec_json),
     }
+
+
+def fallback_company_profile(
+    *,
+    company_name: str,
+    mission_statement: str,
+    product_description: str,
+    target_audience: str,
+    business_type: str,
+    market_scan: str = "",
+) -> dict[str, Any]:
+    product = (product_description or mission_statement or company_name).strip()
+    audience = (target_audience or "early customers").strip()
+    market = " ".join((market_scan or "").split())[:1200]
+    return {
+        "brand_name": company_name,
+        "business_type": business_type,
+        "product": product,
+        "core_customer": audience,
+        "positioning": f"{company_name} helps {audience} get a better result with {product}.",
+        "usp": [
+            f"Purpose-built for {audience}",
+            "Specific product promise instead of a generic solution",
+            "Simple offer that can be understood in one sentence",
+        ],
+        "pain_points": [
+            "The current alternative feels improvised or not made for this exact use case",
+            "Customers want a practical result without changing their routine",
+        ],
+        "desired_outcome": "A clear, concrete improvement that feels believable quickly.",
+        "alternatives_to_beat": ["generic substitutes", "doing nothing", "manual workaround"],
+        "objections": ["Will it work for me?", "Is it easy to use?", "Is the offer credible?"],
+        "proof_points": _extract_profile_proof_points(market),
+        "voice": "specific, confident, premium, simple",
+        "hero_claim": _fallback_hero_claim(product, audience),
+        "copy_bank": [
+            "Made for the exact problem, not borrowed from another category.",
+            "A simple product promise customers can picture immediately.",
+            "Designed for people who want the result without the friction.",
+        ],
+        "must_include": ["specific customer", "specific problem", "specific result", "clear CTA"],
+        "unknowns": ["price", "real testimonials", "regulatory proof"],
+    }
+
+
+async def generate_company_profile(
+    *,
+    company_name: str,
+    mission_statement: str,
+    product_description: str,
+    target_audience: str,
+    business_type: str,
+    market_scan: str = "",
+    revision_request: str = "",
+    previous_profile_json: str = "",
+) -> str:
+    from app.agents.llm_client import call_simple
+    from app.core.config import get_settings
+
+    fallback = fallback_company_profile(
+        company_name=company_name,
+        mission_statement=mission_statement,
+        product_description=product_description,
+        target_audience=target_audience,
+        business_type=business_type,
+        market_scan=market_scan,
+    )
+    settings = get_settings()
+    if not settings.openai_api_key and not settings.anthropic_api_key:
+        return json.dumps(fallback, ensure_ascii=False, indent=2)
+
+    provider = "openai" if settings.openai_api_key else "anthropic"
+    system_prompt = (
+        "Tu es un brand strategist senior. "
+        "Tu transformes un profil business et une etude de marche en company profile "
+        "court, concret et exploitable par un agent engineering qui va coder un site. "
+        "Tu reponds uniquement en JSON valide."
+    )
+    user_msg = f"""
+Business: {company_name}
+Type: {business_type}
+Mission: {mission_statement}
+Produit: {product_description or '(non precise)'}
+Audience: {target_audience or '(non precisee)'}
+Demande de revision: {revision_request or '(premiere generation)'}
+
+Market scan / contexte:
+{market_scan[:5000] if market_scan else '(aucun)'}
+
+Profil precedent, si revision:
+{previous_profile_json[:3000] if previous_profile_json else '(aucun)'}
+
+Retourne exactement ces cles JSON:
+brand_name, business_type, product, core_customer, positioning, usp,
+pain_points, desired_outcome, alternatives_to_beat, objections, proof_points,
+voice, hero_claim, copy_bank, must_include, unknowns.
+
+Regles:
+- Ne change jamais le produit ni le business model.
+- Sois tres specifique au business, comme un vrai brief fondateur.
+- Si une info n'est pas prouvee, place-la dans unknowns ou formule-la comme hypothese.
+- hero_claim doit etre une promesse courte et concrete, pas un slogan vague.
+- alternatives_to_beat doit expliquer contre quoi le site positionne le produit.
+- copy_bank doit donner des phrases utilisables, mais non mensongeres.
+"""
+    try:
+        resp = await call_simple(system_prompt, user_msg, provider=provider, max_tokens=1300)
+        content = resp.content.strip()
+        if "```" in content:
+            match = re.search(r"```(?:json)?\s*(.*?)```", content, flags=re.DOTALL)
+            if match:
+                content = match.group(1).strip()
+        parsed = json.loads(content)
+        if not isinstance(parsed, dict):
+            return json.dumps(fallback, ensure_ascii=False, indent=2)
+        return json.dumps(_merge_profile_defaults(parsed, fallback), ensure_ascii=False, indent=2)
+    except Exception as exc:
+        logger.warning("company_profile_generation_failed", error=str(exc))
+        return json.dumps(fallback, ensure_ascii=False, indent=2)
 
 
 async def generate_site_spec(
@@ -412,6 +533,7 @@ async def generate_site_spec(
     stripe_checkout_url: str = "",
     revision_request: str = "",
     previous_spec_json: str = "",
+    company_profile_json: str = "",
 ) -> str:
     from app.agents.llm_client import call_simple
     from app.core.config import get_settings
@@ -425,6 +547,7 @@ async def generate_site_spec(
         stripe_checkout_url=stripe_checkout_url,
         revision_request=revision_request,
         previous_spec_json=previous_spec_json,
+        company_profile_json=company_profile_json,
     )
     settings = get_settings()
     if not settings.openai_api_key and not settings.anthropic_api_key:
@@ -462,6 +585,9 @@ Audience: {target_audience or '(non precisee)'}
 Checkout URL: {stripe_checkout_url or '(aucune)'}
 Demande de revision: {revision_request or '(premiere generation)'}
 
+Company profile principal:
+{company_profile_json[:5000] if company_profile_json else json.dumps(fallback.get("company_profile", {}), ensure_ascii=False)}
+
 Playbooks disponibles:
 {json.dumps(playbook_summaries, ensure_ascii=False)}
 
@@ -475,10 +601,11 @@ Retourne un JSON avec exactement ces cles:
 playbook_key, playbook_label, business_type, brand_vibe, visual_system,
 benchmark_patterns, hero_pattern, layout_recipe, sections, section_blueprint,
 cta, trust_signals, mandatory_visuals, quality_rules, anti_patterns,
-asset_direction, image_prompt, copy_angles, revision_request.
+asset_direction, image_prompt, copy_angles, company_profile, revision_request.
 
 Regles:
 - Choisis UN playbook_key dans la liste.
+- Le company_profile est la source principale du positionnement, du copy et du hero.
 - Sois tres specifique au produit, jamais generique.
 - Pour ecommerce: CTA achat, prix/offre si possible, image produit centrale.
 - Pour ecommerce: image_prompt doit decrire un packshot produit exact, pas une scene lifestyle.
@@ -500,6 +627,7 @@ Regles:
         if parsed.get("playbook_key") not in PLAYBOOKS:
             parsed["playbook_key"] = fallback["playbook_key"]
             parsed["playbook_label"] = fallback["playbook_label"]
+        parsed["company_profile"] = _parse_json_object(company_profile_json) or fallback.get("company_profile", {})
         visual_system = parsed.get("visual_system") if isinstance(parsed.get("visual_system"), dict) else {}
         parsed["image_prompt"] = build_product_image_prompt(
             company_name=company_name,
@@ -564,3 +692,42 @@ def build_product_image_prompt(
         f"Premium brand visual for {company_name}: {product}. "
         f"Visual style: {style}. Clean professional composition, no unrelated stock photo."
     )
+
+
+def _parse_json_object(value: str) -> dict[str, Any]:
+    if not value:
+        return {}
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _merge_profile_defaults(parsed: dict[str, Any], fallback: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(fallback)
+    for key, value in parsed.items():
+        if value not in (None, "", [], {}):
+            merged[key] = value
+    return merged
+
+
+def _extract_profile_proof_points(market_scan: str) -> list[str]:
+    if not market_scan:
+        return ["Proof points should be added when real evidence exists."]
+    points: list[str] = []
+    for raw in re.split(r"[\n.;]", market_scan):
+        line = raw.strip(" -•\t")
+        if 24 <= len(line) <= 160:
+            points.append(line)
+        if len(points) >= 3:
+            break
+    return points or ["Market scan exists, but no concise proof point was extracted."]
+
+
+def _fallback_hero_claim(product: str, audience: str) -> str:
+    product = product.strip().rstrip(".")
+    audience = audience.strip().rstrip(".")
+    if product and audience:
+        return f"{product} for {audience}"
+    return product or "A clearer way to get the result"
