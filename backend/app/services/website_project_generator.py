@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -10,6 +11,8 @@ import structlog
 from app.agents.base import TokenStats
 
 logger = structlog.get_logger()
+
+WEBSITE_ENGINEERING_TIMEOUT_S = 240
 
 
 REQUIRED_PROJECT_FILES = [
@@ -102,7 +105,14 @@ async def generate_website_project(
     provider_prompt = user_prompt
     for attempt in range(2):
         try:
-            resp = await call_simple(system_prompt, provider_prompt, provider=provider, max_tokens=12000)
+            resp = await call_simple(
+                system_prompt,
+                provider_prompt,
+                provider=provider,
+                max_tokens=12000,
+                timeout_s=WEBSITE_ENGINEERING_TIMEOUT_S,
+                max_retries=1,
+            )
             parsed = _parse_json_object(resp.content)
             files = _normalize_files(parsed.get("files"))
             html = str(parsed.get("entry_html") or parsed.get("html") or "").strip()
@@ -123,7 +133,7 @@ async def generate_website_project(
             )
         except Exception as exc:
             last_error = exc
-            error_text = str(exc)
+            error_text = _format_generation_error(exc)
             logger.warning(
                 "website_project_anthropic_failed",
                 attempt=attempt + 1,
@@ -132,13 +142,27 @@ async def generate_website_project(
             )
             if "credit balance is too low" in error_text.lower():
                 break
+            if "timeout_after" in error_text:
+                break
             if attempt == 0:
                 provider_prompt = _repair_prompt(user_prompt, error_text)
                 continue
             break
 
-    logger.warning("website_project_generation_failed", error=str(last_error), company_name=company_name)
-    raise RuntimeError(f"website_project_generation_failed_anthropic_only:{str(last_error)[:240]}")
+    final_error = _format_generation_error(last_error)
+    logger.warning("website_project_generation_failed", error=final_error, company_name=company_name)
+    raise RuntimeError(f"website_project_generation_failed_anthropic_only:{final_error[:240]}")
+
+
+def _format_generation_error(exc: Exception | None) -> str:
+    if exc is None:
+        return "unknown_error"
+    if isinstance(exc, asyncio.TimeoutError):
+        return f"anthropic_timeout_after_{WEBSITE_ENGINEERING_TIMEOUT_S}s"
+    text = str(exc).strip()
+    if text:
+        return text
+    return exc.__class__.__name__
 
 
 def project_manifest(project: WebsiteProject, *, site_spec_json: str) -> dict[str, Any]:

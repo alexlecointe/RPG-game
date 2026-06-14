@@ -114,6 +114,7 @@ async def call_anthropic_raw(
     max_tokens: int = 4096,
     tools: list[dict] | None = None,
     timeout_s: float = DEFAULT_TIMEOUT_S,
+    max_retries: int = MAX_RETRIES,
 ):
     """Low-level Anthropic call with retry + timeout. Returns the raw response."""
     settings = get_settings()
@@ -128,12 +129,13 @@ async def call_anthropic_raw(
         "max_tokens": max_tokens,
         "system": system_prompt,
         "messages": messages,
+        "timeout": timeout_s,
     }
     if tools:
         kwargs["tools"] = tools
 
     last_exc = None
-    for attempt in range(MAX_RETRIES):
+    for attempt in range(max_retries):
         t0 = time.monotonic()
         try:
             response = await asyncio.wait_for(
@@ -153,7 +155,7 @@ async def call_anthropic_raw(
         except Exception as exc:
             last_exc = exc
             latency = int((time.monotonic() - t0) * 1000)
-            if _is_retryable(exc) and attempt < MAX_RETRIES - 1:
+            if _is_retryable(exc) and attempt < max_retries - 1:
                 wait = BASE_BACKOFF_S * (2 ** attempt)
                 logger.warning(
                     "llm_call_retry",
@@ -245,6 +247,8 @@ async def call_simple(
     user_prompt: str,
     provider: str = "anthropic",
     max_tokens: int = 512,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+    max_retries: int = MAX_RETRIES,
 ) -> LLMResponse:
     """Simple one-shot call (used by the scorer). Returns content string."""
     settings = get_settings()
@@ -255,6 +259,8 @@ async def call_simple(
             system_prompt,
             [{"role": "user", "content": user_prompt}],
             max_tokens=max_tokens,
+            timeout_s=timeout_s,
+            max_retries=max_retries,
         )
         text = resp.content[0].text
         usage = resp.usage
