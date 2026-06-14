@@ -369,6 +369,15 @@ struct Mission: Codable, Identifiable {
     var isCompleted: Bool { status == "completed" }
     var isFailed: Bool { status == "failed" }
     var isRejected: Bool { status == "rejected" }
+    var hasVisibleDeliverable: Bool {
+        guard isCompleted,
+              missionType != "landing_page",
+              missionType != "payment_setup",
+              let deliverable,
+              !deliverable.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return false }
+        return true
+    }
 
     var taskSourceDisplay: String {
         switch source {
