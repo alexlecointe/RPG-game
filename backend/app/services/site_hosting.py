@@ -50,7 +50,11 @@ async def publish_site(
     """Publish a new site artifact, mark it as live, and archive old versions."""
     from app.models.entities import SiteArtifact
 
-    html_content = sanitize_site_html(html_content)
+    settings = get_settings()
+    html_content = enforce_site_integrations(
+        html_content,
+        meta_pixel_id=settings.meta_pixel_id,
+    )
 
     # Get current version number
     result = await db.execute(
@@ -109,7 +113,11 @@ async def get_live_artifact(db: AsyncSession, slug: str) -> "SiteArtifact | None
 
 async def prepare_site_html_for_checkout(db: AsyncSession, artifact: "SiteArtifact") -> str:  # type: ignore[name-defined]
     """Attach the latest Stripe Payment Link to purchase CTAs on hosted sites."""
-    fallback_html = sanitize_site_html(str(getattr(artifact, "html_content", "") or ""))
+    settings = get_settings()
+    fallback_html = enforce_site_integrations(
+        str(getattr(artifact, "html_content", "") or ""),
+        meta_pixel_id=settings.meta_pixel_id,
+    )
     company_id = str(getattr(artifact, "company_id", "") or "")
     slug = str(getattr(artifact, "slug", "") or "")
     try:
@@ -126,7 +134,11 @@ async def prepare_site_html_for_checkout(db: AsyncSession, artifact: "SiteArtifa
     if not payment_url:
         return fallback_html
     try:
-        return _inject_checkout_url(fallback_html, payment_url)
+        return enforce_site_integrations(
+            fallback_html,
+            checkout_url=payment_url,
+            meta_pixel_id=settings.meta_pixel_id,
+        )
     except Exception as exc:
         logger.exception(
             "site_checkout_inject_failed",
@@ -439,6 +451,9 @@ def _inject_checkout_url(html: str, payment_url: str) -> str:
     if (!isCheckoutCta) return;
     event.preventDefault();
     if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+    try {{
+      if (window.fbq) window.fbq('track', 'InitiateCheckout', {{ currency: 'EUR' }});
+    }} catch (err) {{}}
     window.location.assign(checkoutUrl);
   }}
 
@@ -450,7 +465,140 @@ def _inject_checkout_url(html: str, payment_url: str) -> str:
         return updated
     script = script.replace("<script>", '<script id="rpgagent-checkout-injected">', 1)
     if re.search(r"</body>", updated, flags=re.IGNORECASE):
-        return re.sub(r"</body>", script + "\n</body>", updated, count=1, flags=re.IGNORECASE)
+        return re.sub(
+            r"</body>",
+            lambda _match: script + "\n</body>",
+            updated,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    return updated + script
+
+
+def enforce_site_integrations(
+    html: str,
+    *,
+    checkout_url: str = "",
+    meta_pixel_id: str = "",
+) -> str:
+    """Force critical site integrations independently of the generator.
+
+    The builder/agent can still create the page creatively, but checkout CTA
+    wiring and Meta Pixel should never rely on a prompt being remembered.
+    """
+    updated = sanitize_site_html(html)
+    updated = _mark_checkout_ctas(updated)
+    if meta_pixel_id:
+        updated = _inject_meta_pixel(updated, meta_pixel_id)
+    if checkout_url:
+        updated = _inject_checkout_url(updated, checkout_url)
+    updated = _inject_checkout_tracking(updated)
+    return sanitize_site_html(updated)
+
+
+def _mark_checkout_ctas(html: str) -> str:
+    updated = str(html or "")
+    if not updated:
+        return updated
+    cta_words = (
+        r"(?:commander|commander\s+maintenant|acheter|acheter\s+maintenant|"
+        r"pré[- ]?commander|pre[- ]?order|order|order\s+now|buy|buy\s+now|"
+        r"checkout|panier|cart|shop|purchase|payer|payment|try|trial|demo)"
+    )
+
+    def _rewrite_anchor(match: re.Match[str]) -> str:
+        attrs, body = match.group(1), match.group(2)
+        body_text = re.sub(r"<[^>]+>", " ", body)
+        href = re.search(r"\bhref\s*=\s*(['\"])(.*?)\1", attrs, flags=re.IGNORECASE | re.DOTALL)
+        href_value = href.group(2) if href else ""
+        looks_checkout = (
+            re.search(cta_words, body_text + " " + attrs, flags=re.IGNORECASE)
+            or re.search(r"(#checkout|/checkout|/buy|/order|/cart|buy\.stripe\.com)", href_value, flags=re.IGNORECASE)
+        )
+        if not looks_checkout:
+            return match.group(0)
+        if not re.search(r"\bdata-rpg-checkout\s*=", attrs, flags=re.IGNORECASE):
+            attrs = f'{attrs} data-rpg-checkout="true"'
+        return f"<a{attrs}>{body}</a>"
+
+    def _rewrite_button(match: re.Match[str]) -> str:
+        attrs, body = match.group(1), match.group(2)
+        body_text = re.sub(r"<[^>]+>", " ", body)
+        if not re.search(cta_words, body_text + " " + attrs, flags=re.IGNORECASE):
+            return match.group(0)
+        if not re.search(r"\bdata-rpg-checkout\s*=", attrs, flags=re.IGNORECASE):
+            attrs = f'{attrs} data-rpg-checkout="true"'
+        return f"<button{attrs}>{body}</button>"
+
+    updated = re.sub(r"<a\b([^>]*)>(.*?)</a>", _rewrite_anchor, updated, flags=re.IGNORECASE | re.DOTALL)
+    updated = re.sub(r"<button\b([^>]*)>(.*?)</button>", _rewrite_button, updated, flags=re.IGNORECASE | re.DOTALL)
+    return updated
+
+
+def _inject_meta_pixel(html: str, pixel_id: str) -> str:
+    updated = str(html or "")
+    pixel = str(pixel_id or "").strip()
+    if not updated or not pixel:
+        return updated
+    lower = updated.lower()
+    if "fbq(" in lower and pixel.lower() in lower and "pageview" in lower:
+        return updated
+    safe_pixel = escape(pixel, quote=True)
+    script = f"""
+<!-- Meta Pixel Code -->
+<script id="rpgagent-meta-pixel">
+!function(f,b,e,v,n,t,s){{if(f.fbq)return;n=f.fbq=function(){{n.callMethod?
+n.callMethod.apply(n,arguments):n.queue.push(arguments)}};if(!f._fbq)f._fbq=n;
+n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;
+t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}}(window, document,'script',
+'https://connect.facebook.net/en_US/fbevents.js');
+fbq('init', '{safe_pixel}');
+fbq('track', 'PageView');
+</script>
+<noscript><img height="1" width="1" style="display:none" src="https://www.facebook.com/tr?id={safe_pixel}&ev=PageView&noscript=1"></noscript>
+<!-- End Meta Pixel Code -->"""
+    if re.search(r"</head>", updated, flags=re.IGNORECASE):
+        return re.sub(
+            r"</head>",
+            lambda _match: script + "\n</head>",
+            updated,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    return script + "\n" + updated
+
+
+def _inject_checkout_tracking(html: str) -> str:
+    updated = str(html or "")
+    if not updated or "rpgagent-checkout-tracking" in updated:
+        return updated
+    script = """
+<script id="rpgagent-checkout-tracking">
+(function () {
+  function findCheckout(node) {
+    while (node && node !== document.body && node.nodeType === 1) {
+      if (node.getAttribute && node.getAttribute('data-rpg-checkout') === 'true') return node;
+      node = node.parentElement;
+    }
+    return null;
+  }
+  document.addEventListener('click', function (event) {
+    var target = findCheckout(event.target);
+    if (!target) return;
+    try {
+      if (window.fbq) window.fbq('track', 'InitiateCheckout', { currency: 'EUR' });
+    } catch (err) {}
+  }, true);
+})();
+</script>"""
+    if re.search(r"</body>", updated, flags=re.IGNORECASE):
+        return re.sub(
+            r"</body>",
+            lambda _match: script + "\n</body>",
+            updated,
+            count=1,
+            flags=re.IGNORECASE,
+        )
     return updated + script
 
 

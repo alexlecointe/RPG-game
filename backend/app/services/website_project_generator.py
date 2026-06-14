@@ -132,6 +132,7 @@ def _render_hybrid_project(
     cta = spec.get("cta") if isinstance(spec.get("cta"), dict) else {}
     checkout = checkout_url or str(cta.get("primary_url") or "").strip()
     cta_label = str(cta.get("primary_label") or ("Commander maintenant" if business_type == "ecommerce" else "Commencer"))
+    price_label = _extract_price_label(spec, business_type)
 
     benefits = _string_list(profile.get("usp")) or _string_list(spec.get("copy_angles")) or [
         f"Pensé pour {audience}",
@@ -164,6 +165,7 @@ def _render_hybrid_project(
         business_type=business_type,
         colors=colors,
         cta_label=cta_label,
+        price_label=price_label,
         checkout_url=checkout,
         product_image_url=image_url,
         benefits=benefits,
@@ -205,6 +207,7 @@ def _build_entry_html(
     business_type: str,
     colors: dict[str, str],
     cta_label: str,
+    price_label: str,
     checkout_url: str,
     product_image_url: str,
     benefits: list[str],
@@ -222,6 +225,8 @@ def _build_entry_html(
     safe_playbook = _e(playbook_label)
     checkout_href = _safe_url(checkout_url) or "#checkout"
     safe_cta = _e(cta_label)
+    safe_price = _e(price_label)
+    price_note = f'<p class="price-note">Prix de lancement: <strong>{safe_price}</strong></p>' if safe_price else ""
     image_html = (
         f'<img src="{_e(product_image_url)}" alt="{brand} product" loading="eager">'
         if product_image_url
@@ -333,6 +338,13 @@ def _build_entry_html(
     }}
     .hero-actions {{ display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }}
     .hero-note {{ margin-top: 18px; color: color-mix(in srgb, var(--ink) 58%, transparent); font-weight: 700; }}
+    .price-note {{
+      margin: 18px 0 0;
+      font-size: 1.02rem;
+      color: color-mix(in srgb, var(--ink) 68%, transparent);
+      font-weight: 760;
+    }}
+    .price-note strong {{ color: var(--ink); font-size: 1.18em; }}
     .visual {{
       position: relative;
       min-height: 560px;
@@ -444,6 +456,7 @@ def _build_entry_html(
           <a class="button" data-rpg-checkout="true" href="{_e(checkout_href)}">{safe_cta}</a>
           <a class="button secondary" href="#proof">Voir les preuves</a>
         </div>
+        {price_note}
         <p class="hero-note">Produit: {safe_product}</p>
       </div>
       <div class="visual" aria-label="Product visual">{image_html}</div>
@@ -500,6 +513,7 @@ def _build_entry_html(
             <p class="eyebrow">Offre</p>
             <h2>{brand} est prêt à être testé.</h2>
             <p>{safe_positioning}</p>
+            {price_note}
           </div>
           <a class="button" data-rpg-checkout="true" href="{_e(checkout_href)}">{safe_cta}</a>
         </div>
@@ -586,6 +600,26 @@ def _normalize_palette(value: list[Any]) -> dict[str, str]:
         "paper": colors[3],
         "muted": colors[4],
     }
+
+
+def _extract_price_label(spec: dict[str, Any], business_type: str) -> str:
+    pricing = spec.get("pricing") if isinstance(spec.get("pricing"), dict) else {}
+    offer = spec.get("offer") if isinstance(spec.get("offer"), dict) else {}
+    candidates = [
+        pricing.get("primary_price"),
+        pricing.get("price"),
+        pricing.get("monthly"),
+        offer.get("price"),
+        offer.get("amount"),
+        spec.get("price"),
+    ]
+    for candidate in candidates:
+        text = str(candidate or "").strip()
+        if text and any(token in text.lower() for token in ["€", "eur", "$", "usd"]):
+            return text
+    if business_type == "ecommerce":
+        return "29€"
+    return ""
 
 
 def _fallback_claim(company_name: str, product: str, audience: str) -> str:

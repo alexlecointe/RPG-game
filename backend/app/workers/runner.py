@@ -535,6 +535,42 @@ async def _run_mission_inner(mission_id: str) -> None:
 
                 # Pre-validation HTML structurelle — alimente le feedback mais ne bypass pas le scorer
                 if mission.mission_type in WEBSITE_MISSION_TYPES:
+                    from app.core.config import get_settings as _get_quality_settings
+                    from app.services.website_quality import evaluate_website_html, repair_website_html
+
+                    _quality_settings = _get_quality_settings()
+                    repaired_html = repair_website_html(
+                        agent_result.content,
+                        checkout_url=stripe_checkout_url,
+                        meta_pixel_id=_quality_settings.meta_pixel_id,
+                    )
+                    if repaired_html != agent_result.content:
+                        agent_result.content = repaired_html
+                        if log_step:
+                            await log_step(
+                                "website_auto_repair",
+                                "Réparation automatique — Stripe/Pixel/CTA sécurisés avant validation",
+                            )
+
+                    website_quality = await evaluate_website_html(
+                        agent_result.content,
+                        product_image_url=product_image_url,
+                        checkout_url=stripe_checkout_url,
+                        meta_pixel_id=_quality_settings.meta_pixel_id,
+                        business_type=company.business_type.value,
+                        run_browser=True,
+                    )
+                    if log_step:
+                        await log_step(
+                            "website_quality_gate",
+                            f"Quality gate website : {website_quality.score}/10"
+                            + (
+                                f" — {len(website_quality.issues)} problème(s)"
+                                if website_quality.issues
+                                else " — rendu validé"
+                            ),
+                        )
+
                     html_issues = _validate_landing_html(
                         agent_result.content,
                         product_image_url=product_image_url,
@@ -548,6 +584,7 @@ async def _run_mission_inner(mission_id: str) -> None:
                         business_type=company.business_type.value,
                     )
                     html_issues.extend(visual_issues)
+                    html_issues.extend(website_quality.issues)
                     if html_issues:
                         if log_step:
                             await log_step(
@@ -588,6 +625,13 @@ async def _run_mission_inner(mission_id: str) -> None:
                     agent_result.content,
                     company.business_type.value,
                 )
+                if mission.mission_type in WEBSITE_MISSION_TYPES:
+                    try:
+                        score = min(score, website_quality.score)  # type: ignore[name-defined]
+                        quality_feedback = website_quality.feedback()  # type: ignore[name-defined]
+                        feedback = f"{feedback}\n\n{quality_feedback}" if feedback else quality_feedback
+                    except Exception:
+                        pass
 
                 if log_step:
                     await log_step(
@@ -1145,11 +1189,17 @@ def _validate_landing_html(html: str, product_image_url: str = "", business_type
     if business_type == "ecommerce":
         if any(kw in h for kw in ["waitlist", "liste d'attente", "join the waitlist", "coming soon"]):
             issues.append("Formulaire waitlist détecté pour e-commerce — remplacer par un bouton d'achat Stripe")
-        if "stripe" not in h and "buy.stripe.com" not in h:
-            issues.append("Aucun lien Stripe détecté — le CTA doit pointer vers un Stripe Payment Link")
+        if (
+            "stripe" not in h
+            and "buy.stripe.com" not in h
+            and 'data-rpg-checkout="true"' not in h
+            and "data-rpg-checkout='true'" not in h
+        ):
+            issues.append("Aucun CTA checkout détecté — le bouton d'achat doit être injectable par Stripe")
 
     # Analytics Meta Pixel
-    if "fbq(" not in html and "facebook.net" not in html:
+    from app.core.config import get_settings as _get_validation_settings
+    if _get_validation_settings().meta_pixel_id and "fbq(" not in html and "facebook.net" not in html:
         issues.append("Meta Pixel / fbq() manquant dans le HTML")
 
     return issues
