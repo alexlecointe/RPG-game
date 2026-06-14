@@ -583,6 +583,14 @@ async def _run_mission_inner(mission_id: str) -> None:
 
             agent_result = best_result or agent_result
 
+            if not (agent_result.content or "").strip():
+                if log_step:
+                    await log_step(
+                        "empty_deliverable_failed",
+                        "Livrable vide après retries — mission arrêtée.",
+                    )
+                raise RuntimeError("empty_deliverable_after_retries")
+
             for i, ts in enumerate(agent_result.token_stats):
                 db.add(TokenUsage(
                     mission_id=mission_id,
