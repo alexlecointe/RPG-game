@@ -540,6 +540,33 @@ async def _call_anthropic(
 
     is_html_mission = output_format == "html"
 
+    async def force_final_synthesis(current_response=None) -> tuple[str, int]:
+        synth_messages = list(messages)
+        if current_response is not None and getattr(current_response, "content", None):
+            synth_messages.append({"role": "assistant", "content": current_response.content})
+        synth_messages.append({
+            "role": "user",
+            "content": (
+                f"Redige maintenant le livrable final complet au format {output_format}. "
+                "Utilise les resultats d'outils deja fournis dans cette conversation. "
+                "N'appelle plus aucun outil. Ne renvoie pas de preambule."
+            ),
+        })
+        synth_response, synth_latency = await call_anthropic_raw(
+            system_prompt, synth_messages, max_tokens=16384 if is_html_mission else 4096,
+            tools=None, timeout_s=COMPLEX_TIMEOUT_S,
+        )
+        synth_text_parts = [b.text for b in synth_response.content if hasattr(b, "text")]
+        synth_usage = synth_response.usage
+        all_token_stats.append(TokenStats(
+            provider="anthropic",
+            model=use_model,
+            input_tokens=synth_usage.input_tokens,
+            output_tokens=synth_usage.output_tokens,
+            total_tokens=synth_usage.input_tokens + synth_usage.output_tokens,
+        ))
+        return "\n".join(synth_text_parts).strip(), synth_latency
+
     for iteration in range(max_iterations + 1):
         _max_tok = 16384 if is_html_mission else 4096
         response, latency = await call_anthropic_raw(
@@ -558,7 +585,10 @@ async def _call_anthropic(
 
         if response.stop_reason != "tool_use" or not registry:
             text_parts = [b.text for b in response.content if hasattr(b, "text")]
-            content = "\n".join(text_parts)
+            content = "\n".join(text_parts).strip()
+            if not content and tool_calls_log:
+                logger.info("empty_tool_synthesis_forcing_final_answer", provider="anthropic")
+                content, latency = await force_final_synthesis(current_response=response)
             return AgentResult(
                 format=output_format,
                 content=content,
@@ -595,22 +625,12 @@ async def _call_anthropic(
     text_parts = [b.text for b in response.content if hasattr(b, "text")]
     if not text_parts:
         logger.info("tool_loop_exhausted_forcing_synthesis", provider="anthropic")
-        synth_response, synth_latency = await call_anthropic_raw(
-            system_prompt, messages, max_tokens=16384 if is_html_mission else 4096,
-            tools=None, timeout_s=COMPLEX_TIMEOUT_S,
-        )
-        text_parts = [b.text for b in synth_response.content if hasattr(b, "text")]
-        synth_usage = synth_response.usage
-        all_token_stats.append(TokenStats(
-            provider="anthropic",
-            model=use_model,
-            input_tokens=synth_usage.input_tokens,
-            output_tokens=synth_usage.output_tokens,
-            total_tokens=synth_usage.input_tokens + synth_usage.output_tokens,
-        ))
+        content, _ = await force_final_synthesis()
+    else:
+        content = "\n".join(text_parts).strip()
     return AgentResult(
         format=output_format,
-        content="\n".join(text_parts),
+        content=content,
         metadata={"provider": "anthropic", "model": use_model},
         tool_calls=tool_calls_log,
         token_stats=all_token_stats,
