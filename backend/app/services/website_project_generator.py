@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import asyncio
 from dataclasses import dataclass, field
 from typing import Any
@@ -98,22 +97,23 @@ async def generate_website_project(
         quality_feedback=quality_feedback,
     )
 
-    from app.agents.llm_client import call_simple
+    from app.agents.llm_client import call_anthropic_raw
 
     last_error: Exception | None = None
     provider = "anthropic"
     provider_prompt = user_prompt
     for attempt in range(2):
         try:
-            resp = await call_simple(
+            raw_response, latency = await call_anthropic_raw(
                 system_prompt,
-                provider_prompt,
-                provider=provider,
+                [{"role": "user", "content": provider_prompt}],
                 max_tokens=12000,
+                tools=[_project_tool_schema()],
+                tool_choice={"type": "tool", "name": "submit_website_project"},
                 timeout_s=WEBSITE_ENGINEERING_TIMEOUT_S,
                 max_retries=1,
             )
-            parsed = _parse_json_object(resp.content)
+            parsed = _extract_project_payload(raw_response)
             files = _normalize_files(parsed.get("files"))
             html = str(parsed.get("entry_html") or parsed.get("html") or "").strip()
             warnings = _validate_project(files, html, meta_pixel_id=meta_pixel_id)
@@ -126,9 +126,9 @@ async def generate_website_project(
                 html=html,
                 files=files,
                 engine="llm_engineering_project",
-                provider=resp.provider,
-                model=resp.model,
-                token_stats=[_token_stats(resp)],
+                provider=provider,
+                model=settings.anthropic_model,
+                token_stats=[_token_stats_from_anthropic(raw_response, settings.anthropic_model)],
                 warnings=warnings,
             )
         except Exception as exc:
@@ -189,7 +189,8 @@ def _system_prompt() -> str:
         "You generate code from scratch, organized like a deployable mini web app. "
         "You do not use generic AI templates. You create a precise visual direction from "
         "the business context, then code a premium landing page. "
-        "Return only valid JSON. No markdown fences. No commentary."
+        "You must call the submit_website_project tool with the complete project. "
+        "Do not return raw JSON or markdown."
     )
 
 
@@ -232,7 +233,7 @@ def _user_prompt(
     }
     return (
         "Build the website using a Polsia-like engineering workflow.\n"
-        "Return a JSON object with exactly these top-level keys:\n"
+        "Use the submit_website_project tool exactly once with:\n"
         "- files: object where keys are file paths and values are complete file contents.\n"
         "- entry_html: complete self-contained production HTML for our current gateway.\n\n"
         "Required file paths inside files:\n"
@@ -266,27 +267,47 @@ def _repair_prompt(original_prompt: str, error_text: str) -> str:
         + "\n\nSTRICT REPAIR REQUIRED:\n"
         + "Your previous response was rejected by validation.\n"
         + f"Validation errors: {error_text[:800]}\n"
-        + "Return the same JSON shape again, but fix every validation error.\n"
+        + "Call submit_website_project again, but fix every validation error.\n"
         + "Do not shorten entry_html. Include a complete <style> section, full body sections, "
         + "data-rpg-checkout=\"true\" on checkout CTAs, and if meta_pixel_id is present include "
         + "fbq init, PageView, and InitiateCheckout tracking.\n"
     )
 
 
-def _parse_json_object(content: str) -> dict[str, Any]:
-    text = (content or "").strip()
-    if "```" in text:
-        match = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL)
-        if match:
-            text = match.group(1).strip()
-    start = text.find("{")
-    end = text.rfind("}")
-    if start >= 0 and end > start:
-        text = text[start:end + 1]
-    parsed = json.loads(text)
-    if not isinstance(parsed, dict):
-        raise ValueError("website_project_response_not_object")
-    return parsed
+def _project_tool_schema() -> dict[str, Any]:
+    return {
+        "name": "submit_website_project",
+        "description": "Submit the complete website mini-project and publishable HTML artifact.",
+        "input_schema": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "files": {
+                    "type": "object",
+                    "description": "Project files keyed by relative file path.",
+                    "additionalProperties": {"type": "string"},
+                },
+                "entry_html": {
+                    "type": "string",
+                    "description": "Complete self-contained production HTML for the current gateway.",
+                },
+            },
+            "required": ["files", "entry_html"],
+        },
+    }
+
+
+def _extract_project_payload(response) -> dict[str, Any]:
+    for block in response.content:
+        if getattr(block, "type", "") == "tool_use" and getattr(block, "name", "") == "submit_website_project":
+            payload = getattr(block, "input", None)
+            if isinstance(payload, dict):
+                return payload
+    text_parts = [b.text for b in response.content if hasattr(b, "text")]
+    text = "\n".join(text_parts).strip()
+    if text:
+        logger.warning("website_project_unexpected_text_response", preview=text[:500])
+    raise ValueError("website_project_tool_payload_missing")
 
 
 def _normalize_files(value: Any) -> dict[str, str]:
@@ -331,11 +352,12 @@ def _json_or_text(value: str) -> Any:
         return value
 
 
-def _token_stats(resp) -> TokenStats:
+def _token_stats_from_anthropic(response, model: str) -> TokenStats:
+    usage = response.usage
     return TokenStats(
-        provider=resp.provider,
-        model=resp.model,
-        input_tokens=resp.input_tokens,
-        output_tokens=resp.output_tokens,
-        total_tokens=resp.input_tokens + resp.output_tokens,
+        provider="anthropic",
+        model=model,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        total_tokens=usage.input_tokens + usage.output_tokens,
     )

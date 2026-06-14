@@ -113,6 +113,7 @@ async def call_anthropic_raw(
     messages: list[dict],
     max_tokens: int = 4096,
     tools: list[dict] | None = None,
+    tool_choice: dict | None = None,
     timeout_s: float = DEFAULT_TIMEOUT_S,
     max_retries: int = MAX_RETRIES,
 ):
@@ -133,6 +134,8 @@ async def call_anthropic_raw(
     }
     if tools:
         kwargs["tools"] = tools
+    if tool_choice:
+        kwargs["tool_choice"] = tool_choice
 
     last_exc = None
     for attempt in range(max_retries):
