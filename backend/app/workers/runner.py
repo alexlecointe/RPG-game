@@ -12,6 +12,7 @@ from app.models.entities import Mission, MissionLog, MissionStatus, Notification
 logger = structlog.get_logger()
 
 WEBSITE_MISSION_TYPES = {"landing_page", "landing_page_revision"}
+WEBSITE_STRATEGY_TIMEOUT_S = 90
 
 
 def schedule_mission_run(mission_id: str) -> None:
@@ -290,38 +291,55 @@ async def _run_mission_inner(mission_id: str) -> None:
                                 stripe_checkout_url = _m.group(0)
                 from app.services.website_strategy import generate_company_profile, generate_site_spec
 
-                website_profile = await generate_company_profile(
-                    company_name=company.name,
-                    mission_statement=company.mission_statement,
-                    product_description=company.product_description or "",
-                    target_audience=company.target_audience or "",
-                    business_type=company.business_type.value,
-                    market_scan=market_scan_deliverable,
-                    revision_request=revision_request,
-                    previous_profile_json=previous_company_profile,
-                )
+                try:
+                    website_profile = await asyncio.wait_for(
+                        generate_company_profile(
+                            company_name=company.name,
+                            mission_statement=company.mission_statement,
+                            product_description=company.product_description or "",
+                            target_audience=company.target_audience or "",
+                            business_type=company.business_type.value,
+                            market_scan=market_scan_deliverable,
+                            revision_request=revision_request,
+                            previous_profile_json=previous_company_profile,
+                        ),
+                        timeout=WEBSITE_STRATEGY_TIMEOUT_S,
+                    )
 
-                website_strategy = await generate_site_spec(
-                    company_name=company.name,
-                    mission_statement=company.mission_statement,
-                    product_description=company.product_description or "",
-                    target_audience=company.target_audience or "",
-                    business_type=company.business_type.value,
-                    market_scan=market_scan_deliverable,
-                    stripe_checkout_url=stripe_checkout_url,
-                    revision_request=revision_request,
-                    previous_spec_json=previous_site_spec,
-                    company_profile_json=website_profile,
-                )
-                website_brief = await _generate_website_brief(
-                    company_name=company.name,
-                    mission_statement=company.mission_statement,
-                    product_description=company.product_description or "",
-                    target_audience=company.target_audience or "",
-                    business_type=company.business_type.value,
-                    market_scan=market_scan_deliverable,
-                    stripe_checkout_url=stripe_checkout_url,
-                )
+                    website_strategy = await asyncio.wait_for(
+                        generate_site_spec(
+                            company_name=company.name,
+                            mission_statement=company.mission_statement,
+                            product_description=company.product_description or "",
+                            target_audience=company.target_audience or "",
+                            business_type=company.business_type.value,
+                            market_scan=market_scan_deliverable,
+                            stripe_checkout_url=stripe_checkout_url,
+                            revision_request=revision_request,
+                            previous_spec_json=previous_site_spec,
+                            company_profile_json=website_profile,
+                        ),
+                        timeout=WEBSITE_STRATEGY_TIMEOUT_S,
+                    )
+                    website_brief = await asyncio.wait_for(
+                        _generate_website_brief(
+                            company_name=company.name,
+                            mission_statement=company.mission_statement,
+                            product_description=company.product_description or "",
+                            target_audience=company.target_audience or "",
+                            business_type=company.business_type.value,
+                            market_scan=market_scan_deliverable,
+                            stripe_checkout_url=stripe_checkout_url,
+                        ),
+                        timeout=WEBSITE_STRATEGY_TIMEOUT_S,
+                    )
+                except asyncio.TimeoutError as exc:
+                    if log_step:
+                        await log_step(
+                            "website_strategy_timeout",
+                            f"Stratégie website trop longue — arrêt après {WEBSITE_STRATEGY_TIMEOUT_S}s.",
+                        )
+                    raise RuntimeError(f"website_strategy_timeout_after_{WEBSITE_STRATEGY_TIMEOUT_S}s") from exc
 
                 # --- 6. Stocker le profil et le brief comme memory ---
                 if website_profile:

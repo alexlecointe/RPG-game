@@ -280,6 +280,7 @@ async def call_simple(
             system_prompt,
             user_prompt,
             max_tokens=max_tokens,
+            timeout_s=timeout_s,
         )
         choice = resp.choices[0]
         usage = resp.usage
