@@ -12,7 +12,8 @@ from app.models.entities import Mission, MissionLog, MissionStatus, Notification
 logger = structlog.get_logger()
 
 WEBSITE_MISSION_TYPES = {"landing_page", "landing_page_revision"}
-WEBSITE_STRATEGY_TIMEOUT_S = 90
+WEBSITE_STRATEGY_TIMEOUT_S = 55
+WEBSITE_IMAGE_TIMEOUT_S = 95
 
 
 def schedule_mission_run(mission_id: str) -> None:
@@ -289,64 +290,109 @@ async def _run_mission_inner(mission_id: str) -> None:
                             _m = _re.search(r"https://buy\.stripe\.com/[^\s\"'>\)]+", _ps)
                             if _m:
                                 stripe_checkout_url = _m.group(0)
-                from app.services.website_strategy import generate_company_profile, generate_site_spec
+                from app.core.config import get_settings as _get_settings
+                from app.services.website_strategy import (
+                    build_website_brief_from_strategy,
+                    generate_website_strategy_bundle,
+                )
 
-                try:
-                    website_profile = await asyncio.wait_for(
-                        generate_company_profile(
-                            company_name=company.name,
-                            mission_statement=company.mission_statement,
-                            product_description=company.product_description or "",
-                            target_audience=company.target_audience or "",
-                            business_type=company.business_type.value,
-                            market_scan=market_scan_deliverable,
-                            revision_request=revision_request,
-                            previous_profile_json=previous_company_profile,
-                        ),
-                        timeout=WEBSITE_STRATEGY_TIMEOUT_S,
+                _settings = _get_settings()
+                cached_profile = ""
+                cached_strategy = ""
+                cached_brief = ""
+                if mission.mission_type != "landing_page_revision":
+                    cached_profile = _memory_content_if_json(
+                        await memory_svc.get(company.id, "brand", "company_profile")
                     )
+                    cached_strategy = _memory_content_if_json(
+                        await memory_svc.get(company.id, "brand", "website_strategy")
+                    )
+                    cached_brief_mem = await memory_svc.get(company.id, "brand", "website_brief")
+                    cached_brief = (cached_brief_mem.content if cached_brief_mem else "") or ""
 
-                    website_strategy = await asyncio.wait_for(
-                        generate_site_spec(
-                            company_name=company.name,
-                            mission_statement=company.mission_statement,
-                            product_description=company.product_description or "",
-                            target_audience=company.target_audience or "",
-                            business_type=company.business_type.value,
-                            market_scan=market_scan_deliverable,
-                            stripe_checkout_url=stripe_checkout_url,
-                            revision_request=revision_request,
-                            previous_spec_json=previous_site_spec,
-                            company_profile_json=website_profile,
-                        ),
-                        timeout=WEBSITE_STRATEGY_TIMEOUT_S,
-                    )
-                    website_brief = await asyncio.wait_for(
-                        _generate_website_brief(
-                            company_name=company.name,
-                            mission_statement=company.mission_statement,
-                            product_description=company.product_description or "",
-                            target_audience=company.target_audience or "",
-                            business_type=company.business_type.value,
-                            market_scan=market_scan_deliverable,
-                            stripe_checkout_url=stripe_checkout_url,
-                        ),
-                        timeout=WEBSITE_STRATEGY_TIMEOUT_S,
-                    )
-                except asyncio.TimeoutError as exc:
+                image_task = None
+                if company.product_image_url:
+                    product_image_url = company.product_image_url
+                    if log_step:
+                        await log_step("product_image_cached", "Image produit existante réutilisée")
+                elif not _settings.replicate_api_token:
                     if log_step:
                         await log_step(
-                            "website_strategy_timeout",
-                            f"Stratégie website trop longue — arrêt après {WEBSITE_STRATEGY_TIMEOUT_S}s.",
+                            "product_image_missing",
+                            "⚠️ Image produit non générée — REPLICATE_API_TOKEN absent. "
+                            "Le site sera créé sans image produit. Tu pourras en générer une plus tard.",
                         )
-                    raise RuntimeError(f"website_strategy_timeout_after_{WEBSITE_STRATEGY_TIMEOUT_S}s") from exc
+                else:
+                    if log_step:
+                        await log_step("product_image", "Génération de l'image produit en parallèle...")
+                    image_task = asyncio.create_task(
+                        _pregenerate_product_image(
+                            company.id,
+                            "",
+                            company.name,
+                            log_step,
+                            "",
+                            product_description=company.product_description or company.mission_statement,
+                            target_audience=company.target_audience or "",
+                            business_type=company.business_type.value,
+                        )
+                    )
+
+                if cached_profile and cached_strategy:
+                    website_profile = cached_profile
+                    website_strategy = cached_strategy
+                    website_brief = cached_brief
+                    if not website_brief:
+                        try:
+                            import json as _json
+
+                            website_brief = build_website_brief_from_strategy(
+                                company_name=company.name,
+                                business_type=company.business_type.value,
+                                profile=_json.loads(website_profile),
+                                spec=_json.loads(website_strategy),
+                                stripe_checkout_url=stripe_checkout_url,
+                            )
+                        except Exception:
+                            website_brief = ""
+                    if log_step:
+                        await log_step("website_strategy_cached", "Stratégie website réutilisée depuis la mémoire")
+                else:
+                    try:
+                        bundle = await asyncio.wait_for(
+                            generate_website_strategy_bundle(
+                                company_name=company.name,
+                                mission_statement=company.mission_statement,
+                                product_description=company.product_description or "",
+                                target_audience=company.target_audience or "",
+                                business_type=company.business_type.value,
+                                market_scan=market_scan_deliverable,
+                                stripe_checkout_url=stripe_checkout_url,
+                                revision_request=revision_request,
+                                previous_profile_json=previous_company_profile,
+                                previous_spec_json=previous_site_spec,
+                            ),
+                            timeout=WEBSITE_STRATEGY_TIMEOUT_S,
+                        )
+                        website_profile = bundle.get("company_profile", "")
+                        website_strategy = bundle.get("site_spec", "")
+                        website_brief = bundle.get("website_brief", "")
+                    except asyncio.TimeoutError as exc:
+                        if image_task:
+                            image_task.cancel()
+                        if log_step:
+                            await log_step(
+                                "website_strategy_timeout",
+                                f"Stratégie website trop longue — arrêt après {WEBSITE_STRATEGY_TIMEOUT_S}s.",
+                            )
+                        raise RuntimeError(f"website_strategy_timeout_after_{WEBSITE_STRATEGY_TIMEOUT_S}s") from exc
 
                 # --- 6. Stocker le profil et le brief comme memory ---
                 if website_profile:
                     from app.services.memory import MemoryService as _MS
                     _mem = _MS(db)
                     await _mem.store(
-                        company.id, "brand", "company_profile", website_profile, mission.id
+                        company.id, "brand", "company_profile", website_profile, mission.id, max_chars=8000
                     )
                     if log_step:
                         await log_step(
@@ -357,7 +403,7 @@ async def _run_mission_inner(mission_id: str) -> None:
                     from app.services.memory import MemoryService as _MS
                     _mem = _MS(db)
                     await _mem.store(
-                        company.id, "brand", "website_brief", website_brief, mission.id
+                        company.id, "brand", "website_brief", website_brief, mission.id, max_chars=8000
                     )
                     if log_step:
                         await log_step("website_brief_ready", "Brief créatif prêt — palette, vibe, image produit")
@@ -365,7 +411,7 @@ async def _run_mission_inner(mission_id: str) -> None:
                     from app.services.memory import MemoryService as _MS
                     _mem = _MS(db)
                     await _mem.store(
-                        company.id, "brand", "website_strategy", website_strategy, mission.id
+                        company.id, "brand", "website_strategy", website_strategy, mission.id, max_chars=8000
                     )
                     if log_step:
                         await log_step(
@@ -373,31 +419,24 @@ async def _run_mission_inner(mission_id: str) -> None:
                             "Website playbook prêt — structure et direction visuelle",
                         )
 
-                # --- 3. Pré-générer l'image produit ---
-                from app.core.config import get_settings as _get_settings
-                _settings = _get_settings()
-                if mission.mission_type == "landing_page_revision" and company.product_image_url:
-                    product_image_url = company.product_image_url
-                elif not _settings.replicate_api_token:
-                    if log_step:
-                        await log_step(
-                            "product_image_missing",
-                            "⚠️ Image produit non générée — REPLICATE_API_TOKEN absent. "
-                            "Le site sera créé sans image produit. Tu pourras en générer une plus tard.",
+                # --- 3. Récupérer l'image produit générée en parallèle ---
+                if image_task:
+                    try:
+                        product_image_url = await asyncio.wait_for(
+                            image_task,
+                            timeout=WEBSITE_IMAGE_TIMEOUT_S,
                         )
-                else:
-                    if log_step:
-                        await log_step("product_image", "Génération de l'image produit...")
-                    product_image_url = await _pregenerate_product_image(
-                        company.id,
-                        website_brief,
-                        company.name,
-                        log_step,
-                        website_strategy,
-                        product_description=company.product_description or company.mission_statement,
-                        target_audience=company.target_audience or "",
-                        business_type=company.business_type.value,
-                    )
+                    except asyncio.TimeoutError:
+                        image_task.cancel()
+                        product_image_url = ""
+                        if log_step:
+                            await log_step(
+                                "product_image_timeout",
+                                f"Image produit trop longue — arrêt après {WEBSITE_IMAGE_TIMEOUT_S}s.",
+                            )
+                    except Exception as exc:
+                        product_image_url = ""
+                        logger.warning("product_image_parallel_failed", company_id=company.id, error=str(exc))
                     if not product_image_url and log_step:
                         await log_step(
                             "product_image_failed",
@@ -534,6 +573,7 @@ async def _run_mission_inner(mission_id: str) -> None:
                         break
 
                 # Pre-validation HTML structurelle — alimente le feedback mais ne bypass pas le scorer
+                skip_llm_quality_score = False
                 if mission.mission_type in WEBSITE_MISSION_TYPES:
                     from app.core.config import get_settings as _get_quality_settings
                     from app.services.website_quality import evaluate_website_html, repair_website_html
@@ -613,18 +653,24 @@ async def _run_mission_inner(mission_id: str) -> None:
                         best_score = max(best_score, 1)
                     elif log_step:
                         await log_step("html_validation", "HTML structurel validé")
+                        if website_quality.score >= 9:
+                            skip_llm_quality_score = True
 
                 score_mission_type = (
                     "landing_page"
                     if mission.mission_type in WEBSITE_MISSION_TYPES
                     else mission.mission_type
                 )
-                score, feedback = await score_deliverable(
-                    score_mission_type,
-                    company.mission_statement,
-                    agent_result.content,
-                    company.business_type.value,
-                )
+                if skip_llm_quality_score:
+                    score = website_quality.score  # type: ignore[name-defined]
+                    feedback = website_quality.feedback()  # type: ignore[name-defined]
+                else:
+                    score, feedback = await score_deliverable(
+                        score_mission_type,
+                        company.mission_statement,
+                        agent_result.content,
+                        company.business_type.value,
+                    )
                 if mission.mission_type in WEBSITE_MISSION_TYPES:
                     try:
                         score = min(score, website_quality.score)  # type: ignore[name-defined]
@@ -1170,7 +1216,7 @@ def _validate_landing_html(html: str, product_image_url: str = "", business_type
     if product_image_url and product_image_url not in html:
         issues.append(f"Image produit pré-générée non intégrée ({product_image_url[:50]}...)")
     elif "<img" not in h and not any(
-        visual in h for visual in ["product-render", "dashboard", "phone-screen", "visual-wrap"]
+        visual in h for visual in ["product-render", "css-packshot", "dashboard", "phone-screen", "visual-wrap"]
     ):
         issues.append("Aucun visuel produit/UI dans le HTML — section visuelle manquante")
 
@@ -1322,6 +1368,20 @@ def _important_profile_words(text: str) -> list[str]:
         if len(w) >= 4
     ]
     return [w for w in words if w not in stopwords][:8]
+
+
+def _memory_content_if_json(memory) -> str:
+    """Return cached memory only when it is still valid JSON."""
+    if not memory or not getattr(memory, "content", None):
+        return ""
+    content = str(memory.content or "").strip()
+    try:
+        import json as _json
+
+        parsed = _json.loads(content)
+    except Exception:
+        return ""
+    return content if isinstance(parsed, dict) else ""
 
 
 async def _generate_website_brief(

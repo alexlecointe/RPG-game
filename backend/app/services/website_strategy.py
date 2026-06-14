@@ -647,6 +647,239 @@ Regles:
         return json.dumps(fallback, ensure_ascii=False, indent=2)
 
 
+async def generate_website_strategy_bundle(
+    *,
+    company_name: str,
+    mission_statement: str,
+    product_description: str,
+    target_audience: str,
+    business_type: str,
+    market_scan: str = "",
+    stripe_checkout_url: str = "",
+    revision_request: str = "",
+    previous_profile_json: str = "",
+    previous_spec_json: str = "",
+) -> dict[str, str]:
+    """Generate company_profile + site_spec + brief with one LLM call.
+
+    This replaces the slower serial flow:
+    company_profile call -> site_spec call -> website_brief call.
+    Fallbacks stay deterministic so a strategy timeout does not invent a site.
+    """
+    from app.agents.llm_client import call_simple
+    from app.core.config import get_settings
+
+    fallback_profile = fallback_company_profile(
+        company_name=company_name,
+        mission_statement=mission_statement,
+        product_description=product_description,
+        target_audience=target_audience,
+        business_type=business_type,
+        market_scan=market_scan,
+    )
+    fallback_spec = fallback_site_spec(
+        company_name=company_name,
+        mission_statement=mission_statement,
+        product_description=product_description,
+        target_audience=target_audience,
+        business_type=business_type,
+        stripe_checkout_url=stripe_checkout_url,
+        revision_request=revision_request,
+        previous_spec_json=previous_spec_json,
+        company_profile_json=json.dumps(fallback_profile, ensure_ascii=False),
+    )
+    fallback_brief = build_website_brief_from_strategy(
+        company_name=company_name,
+        business_type=business_type,
+        profile=fallback_profile,
+        spec=fallback_spec,
+        stripe_checkout_url=stripe_checkout_url,
+    )
+    fallback_bundle = {
+        "company_profile": json.dumps(fallback_profile, ensure_ascii=False, indent=2),
+        "site_spec": json.dumps(fallback_spec, ensure_ascii=False, indent=2),
+        "website_brief": fallback_brief,
+    }
+
+    settings = get_settings()
+    if not settings.openai_api_key and not settings.anthropic_api_key:
+        return fallback_bundle
+
+    provider = "openai" if settings.openai_api_key else "anthropic"
+    playbook_summaries = {
+        key: {
+            "label": value["label"],
+            "best_for": value["best_for"],
+            "vibe": enriched["vibe"],
+            "visual_system": enriched["visual_system"],
+            "conversion_rules": enriched["conversion_rules"],
+            "hero_pattern": enriched["hero_pattern"],
+            "layout_recipe": enriched["layout_recipe"],
+            "mandatory_visuals": enriched["mandatory_visuals"],
+            "quality_rules": enriched["quality_rules"],
+            "anti_patterns": enriched["anti_patterns"],
+        }
+        for key, value in PLAYBOOKS.items()
+        for enriched in [_with_design_dna(key, value)]
+    }
+    system_prompt = (
+        "Tu es à la fois brand strategist, directeur artistique et CRO strategist. "
+        "Tu produis un bundle website court, concret, directement exploitable. "
+        "Tu réponds uniquement en JSON valide."
+    )
+    user_msg = f"""
+Business: {company_name}
+Type: {business_type}
+Mission: {mission_statement}
+Produit: {product_description or '(non precise)'}
+Audience: {target_audience or '(non precisee)'}
+Checkout URL: {stripe_checkout_url or '(aucune)'}
+Demande de revision: {revision_request or '(premiere generation)'}
+
+Market scan / contexte:
+{market_scan[:4500] if market_scan else '(aucun)'}
+
+Profil precedent, si revision/cache:
+{previous_profile_json[:2500] if previous_profile_json else '(aucun)'}
+
+Spec precedente, si revision/cache:
+{previous_spec_json[:2500] if previous_spec_json else '(aucune)'}
+
+Playbooks disponibles:
+{json.dumps(playbook_summaries, ensure_ascii=False)}
+
+Retourne exactement ce JSON:
+{{
+  "company_profile": {{
+    "brand_name": "...",
+    "business_type": "...",
+    "product": "...",
+    "core_customer": "...",
+    "positioning": "...",
+    "usp": ["..."],
+    "pain_points": ["..."],
+    "desired_outcome": "...",
+    "alternatives_to_beat": ["..."],
+    "objections": ["..."],
+    "proof_points": ["..."],
+    "voice": "...",
+    "hero_claim": "...",
+    "copy_bank": ["..."],
+    "must_include": ["..."],
+    "unknowns": ["..."]
+  }},
+  "site_spec": {{
+    "playbook_key": "...",
+    "playbook_label": "...",
+    "business_type": "...",
+    "brand_vibe": "...",
+    "visual_system": {{}},
+    "benchmark_patterns": ["..."],
+    "hero_pattern": "...",
+    "layout_recipe": "...",
+    "sections": ["..."],
+    "section_blueprint": ["..."],
+    "cta": {{"primary_label": "...", "primary_url": "..."}},
+    "trust_signals": ["..."],
+    "mandatory_visuals": ["..."],
+    "quality_rules": ["..."],
+    "anti_patterns": ["..."],
+    "asset_direction": "...",
+    "image_prompt": "...",
+    "copy_angles": ["..."],
+    "revision_request": "..."
+  }},
+  "website_brief": "markdown concis en 6 sections, max 350 mots"
+}}
+
+Règles:
+- Choisis un seul playbook_key dans la liste.
+- Le produit, la cible, le business model et le CTA doivent rester fidèles au brief.
+- Pour ecommerce: CTA achat, prix/offre si possible, image produit centrale.
+- Pour ecommerce: image_prompt = packshot produit exact, jamais humain/cycliste/sportif/selfie.
+- Pour SaaS: mockup UI, trial/demo, pricing ou demo.
+- Pour app: mockup téléphone et screens simulés.
+- Ne mens pas sur des preuves: mets les inconnues dans unknowns.
+"""
+    try:
+        resp = await call_simple(system_prompt, user_msg, provider=provider, max_tokens=2400)
+        content = resp.content.strip()
+        if "```" in content:
+            match = re.search(r"```(?:json)?\s*(.*?)```", content, flags=re.DOTALL)
+            if match:
+                content = match.group(1).strip()
+        parsed = json.loads(content)
+        profile = parsed.get("company_profile") if isinstance(parsed.get("company_profile"), dict) else {}
+        profile = _merge_profile_defaults(profile, fallback_profile)
+        spec = parsed.get("site_spec") if isinstance(parsed.get("site_spec"), dict) else {}
+        if spec.get("playbook_key") not in PLAYBOOKS:
+            spec["playbook_key"] = fallback_spec["playbook_key"]
+            spec["playbook_label"] = fallback_spec["playbook_label"]
+        spec["company_profile"] = profile
+        visual_system = spec.get("visual_system") if isinstance(spec.get("visual_system"), dict) else {}
+        spec["image_prompt"] = build_product_image_prompt(
+            company_name=company_name,
+            product_description=product_description,
+            target_audience=target_audience,
+            business_type=business_type,
+            visual_style=str(
+                visual_system.get("photo_style")
+                or spec.get("asset_direction")
+                or fallback_spec.get("asset_direction")
+                or ""
+            ),
+        )
+        brief = str(parsed.get("website_brief") or "").strip()
+        if not brief:
+            brief = build_website_brief_from_strategy(
+                company_name=company_name,
+                business_type=business_type,
+                profile=profile,
+                spec=spec,
+                stripe_checkout_url=stripe_checkout_url,
+            )
+        return {
+            "company_profile": json.dumps(profile, ensure_ascii=False, indent=2),
+            "site_spec": json.dumps(spec, ensure_ascii=False, indent=2),
+            "website_brief": brief,
+        }
+    except Exception as exc:
+        logger.warning("website_strategy_bundle_generation_failed", error=str(exc))
+        return fallback_bundle
+
+
+def build_website_brief_from_strategy(
+    *,
+    company_name: str,
+    business_type: str,
+    profile: dict[str, Any],
+    spec: dict[str, Any],
+    stripe_checkout_url: str = "",
+) -> str:
+    """Create a compact markdown brief without another LLM call."""
+    visual = spec.get("visual_system") if isinstance(spec.get("visual_system"), dict) else {}
+    cta = spec.get("cta") if isinstance(spec.get("cta"), dict) else {}
+    lines = [
+        "## 1. VIBE DE MARQUE",
+        str(spec.get("brand_vibe") or profile.get("voice") or "premium, clair, spécifique"),
+        "## 2. SYSTÈME VISUEL",
+        f"Palette: {', '.join(str(v) for v in visual.get('palette', [])[:4]) or 'palette du playbook'}. "
+        f"Typo: {visual.get('typography', 'serif headline + sans body')}. "
+        f"Photo/UI: {visual.get('photo_style') or spec.get('asset_direction') or 'visuel produit premium'}.",
+        "## 3. BRIEF IMAGE PRODUIT",
+        str(spec.get("image_prompt") or "Packshot produit premium, centré, réaliste, sans personne."),
+        "## 4. STRUCTURE DE PAGE",
+        ", ".join(str(v) for v in (spec.get("section_blueprint") or spec.get("sections") or [])[:10]),
+        "## 5. CTA & TRUST SIGNALS",
+        f"CTA: {cta.get('primary_label') or ('Commander' if business_type == 'ecommerce' else 'Commencer')}. "
+        f"URL: {stripe_checkout_url or cta.get('primary_url') or '#checkout'}. "
+        f"Trust: {', '.join(str(v) for v in (spec.get('trust_signals') or [])[:4])}.",
+        "## 6. ANALYTICS EVENTS",
+        f"{company_name}: PageView au chargement, ViewContent sur hero, InitiateCheckout sur CTA, Purchase côté Stripe.",
+    ]
+    return "\n\n".join(line for line in lines if line)
+
+
 def build_product_image_prompt(
     *,
     company_name: str,

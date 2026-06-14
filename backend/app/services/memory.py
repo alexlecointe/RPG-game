@@ -86,13 +86,14 @@ class MemoryService:
         key: str,
         content: str,
         source_mission_id: Optional[str] = None,
+        max_chars: int = MAX_MEMORY_CONTENT_SIZE,
     ) -> CompanyMemory:
         """Upsert a memory entry by (company_id, category, key).
 
         Content is automatically truncated to MAX_MEMORY_CONTENT_SIZE to
         prevent context window bloat on re-injection.
         """
-        compacted = _truncate_content(content)
+        compacted = _truncate_content(content, max_chars=max_chars)
         cat = MemoryCategory(category)
         result = await self._db.execute(
             select(CompanyMemory).where(
