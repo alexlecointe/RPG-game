@@ -401,28 +401,44 @@ async def _run_mission_inner(mission_id: str) -> None:
                 try:
                     if mission.mission_type in WEBSITE_MISSION_TYPES:
                         from app.core.config import get_settings as _settings_for_render
-                        from app.services.website_project_generator import generate_website_project
+                        from app.services.website_project_generator import (
+                            WEBSITE_ENGINEERING_TIMEOUT_S,
+                            generate_website_project,
+                        )
 
                         if log_step:
                             await log_step(
                                 "website_engineering",
                                 "Agent engineering — génération d'un mini-projet website structuré",
                             )
-                        website_project = await generate_website_project(
-                            company_name=company.name,
-                            mission_statement=company.mission_statement,
-                            product_description=company.product_description or "",
-                            target_audience=company.target_audience or "",
-                            business_type=company.business_type.value,
-                            company_profile_json=website_profile,
-                            site_spec_json=website_strategy,
-                            product_image_url=product_image_url,
-                            checkout_url=stripe_checkout_url,
-                            meta_pixel_id=_settings_for_render().meta_pixel_id,
-                            revision_request=revision_request,
-                            existing_site_html=existing_site_html,
-                            quality_feedback=feedback_addendum or "",
-                        )
+                        try:
+                            website_project = await asyncio.wait_for(
+                                generate_website_project(
+                                    company_name=company.name,
+                                    mission_statement=company.mission_statement,
+                                    product_description=company.product_description or "",
+                                    target_audience=company.target_audience or "",
+                                    business_type=company.business_type.value,
+                                    company_profile_json=website_profile,
+                                    site_spec_json=website_strategy,
+                                    product_image_url=product_image_url,
+                                    checkout_url=stripe_checkout_url,
+                                    meta_pixel_id=_settings_for_render().meta_pixel_id,
+                                    revision_request=revision_request,
+                                    existing_site_html=existing_site_html,
+                                    quality_feedback=feedback_addendum or "",
+                                ),
+                                timeout=WEBSITE_ENGINEERING_TIMEOUT_S + 30,
+                            )
+                        except asyncio.TimeoutError as exc:
+                            if log_step:
+                                await log_step(
+                                    "website_engineering_timeout",
+                                    f"Claude n'a pas rendu le mini-projet website en {WEBSITE_ENGINEERING_TIMEOUT_S + 30}s.",
+                                )
+                            raise RuntimeError(
+                                f"website_engineering_timeout_after_{WEBSITE_ENGINEERING_TIMEOUT_S + 30}s"
+                            ) from exc
                         if log_step:
                             await log_step(
                                 "website_project_ready",
