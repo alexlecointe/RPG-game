@@ -75,16 +75,9 @@ async def generate_website_project(
     from app.core.config import get_settings
 
     settings = get_settings()
-    if not settings.openai_api_key and not settings.anthropic_api_key:
-        raise RuntimeError("website_engineering_llm_not_configured")
+    if not settings.anthropic_api_key:
+        raise RuntimeError("website_engineering_anthropic_not_configured")
 
-    # For code generation, prefer the agent-coder model when available, but do
-    # not make the pipeline depend on one vendor's billing state.
-    providers: list[str] = []
-    if settings.anthropic_api_key:
-        providers.append("anthropic")
-    if settings.openai_api_key:
-        providers.append("openai")
     system_prompt = _system_prompt()
     user_prompt = _user_prompt(
         company_name=company_name,
@@ -105,48 +98,47 @@ async def generate_website_project(
     from app.agents.llm_client import call_simple
 
     last_error: Exception | None = None
-    for provider in providers:
-        provider_prompt = user_prompt
-        for attempt in range(2):
-            try:
-                resp = await call_simple(system_prompt, provider_prompt, provider=provider, max_tokens=12000)
-                parsed = _parse_json_object(resp.content)
-                files = _normalize_files(parsed.get("files"))
-                html = str(parsed.get("entry_html") or parsed.get("html") or "").strip()
-                warnings = _validate_project(files, html, meta_pixel_id=meta_pixel_id)
-                if not html or "<html" not in html.lower() or "</html>" not in html.lower():
-                    raise RuntimeError("website_project_missing_entry_html")
-                if warnings:
-                    raise RuntimeError("website_project_validation_failed:" + ";".join(warnings))
+    provider = "anthropic"
+    provider_prompt = user_prompt
+    for attempt in range(2):
+        try:
+            resp = await call_simple(system_prompt, provider_prompt, provider=provider, max_tokens=12000)
+            parsed = _parse_json_object(resp.content)
+            files = _normalize_files(parsed.get("files"))
+            html = str(parsed.get("entry_html") or parsed.get("html") or "").strip()
+            warnings = _validate_project(files, html, meta_pixel_id=meta_pixel_id)
+            if not html or "<html" not in html.lower() or "</html>" not in html.lower():
+                raise RuntimeError("website_project_missing_entry_html")
+            if warnings:
+                raise RuntimeError("website_project_validation_failed:" + ";".join(warnings))
 
-                return WebsiteProject(
-                    html=html,
-                    files=files,
-                    engine="llm_engineering_project",
-                    provider=resp.provider,
-                    model=resp.model,
-                    token_stats=[_token_stats(resp)],
-                    warnings=warnings,
-                )
-            except Exception as exc:
-                last_error = exc
-                error_text = str(exc)
-                logger.warning(
-                    "website_project_provider_failed",
-                    provider=provider,
-                    attempt=attempt + 1,
-                    error=error_text[:220],
-                    company_name=company_name,
-                )
-                if "credit balance is too low" in error_text.lower():
-                    break
-                if attempt == 0:
-                    provider_prompt = _repair_prompt(user_prompt, error_text)
-                    continue
+            return WebsiteProject(
+                html=html,
+                files=files,
+                engine="llm_engineering_project",
+                provider=resp.provider,
+                model=resp.model,
+                token_stats=[_token_stats(resp)],
+                warnings=warnings,
+            )
+        except Exception as exc:
+            last_error = exc
+            error_text = str(exc)
+            logger.warning(
+                "website_project_anthropic_failed",
+                attempt=attempt + 1,
+                error=error_text[:220],
+                company_name=company_name,
+            )
+            if "credit balance is too low" in error_text.lower():
                 break
+            if attempt == 0:
+                provider_prompt = _repair_prompt(user_prompt, error_text)
+                continue
+            break
 
     logger.warning("website_project_generation_failed", error=str(last_error), company_name=company_name)
-    raise RuntimeError(f"website_project_generation_failed:{str(last_error)[:240]}")
+    raise RuntimeError(f"website_project_generation_failed_anthropic_only:{str(last_error)[:240]}")
 
 
 def project_manifest(project: WebsiteProject, *, site_spec_json: str) -> dict[str, Any]:
